@@ -1,0 +1,1 @@
+ALTER TABLE "world_states" ADD CONSTRAINT "world_states_user_id_unique" UNIQUE("user_id");
