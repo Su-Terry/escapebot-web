@@ -3,6 +3,17 @@ import type { Location, StateChange, TurnResult, WorldState } from "./types";
 const MAX_HISTORY = 15;
 
 /**
+ * 寬鬆 normalize：去除所有空白、常見標點、轉小寫。
+ * 讓「黃藍紅」對上「黃 藍 紅」、「B,A,C」對上「B A C」。
+ */
+function normalizeSolution(s: string): string {
+  return s
+    .trim()
+    .toLowerCase()
+    .replace(/[\s、,，。.\-]/g, ""); // 去空白 + 中英標點
+}
+
+/**
  * Return a list of violation messages. Empty list means all changes are valid.
  */
 export function validate(worldState: WorldState, turnResult: TurnResult): string[] {
@@ -89,7 +100,7 @@ function validateChange(
         v.push(`solve_puzzle: puzzle '${sc.puzzleId}' already solved`);
       } else if (
         !sc.attemptedSolution ||
-        sc.attemptedSolution.trim().toLowerCase() !== puzzle.solution.trim().toLowerCase()
+        normalizeSolution(sc.attemptedSolution) !== normalizeSolution(puzzle.solution)
       ) {
         v.push(`solve_puzzle: wrong solution for puzzle '${sc.puzzleId}'`);
       }

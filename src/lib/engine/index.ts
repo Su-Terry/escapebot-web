@@ -1,4 +1,4 @@
-import { validate, apply, applyFallback } from "./ruleEnforcer";
+import { apply, applyFallback, enforceStateChange } from "./ruleEnforcer";
 import {
   getOrCreateUserByClerkId,
   loadWorldState,
@@ -42,30 +42,36 @@ export async function processTurn(clerkUserId: string, action: string): Promise<
   const state = await loadWorldState(uuid);
   if (!state) throw new Error("no active scenario");
 
-  let violations: string[] = [];
+  const turnResult = await handleTurn(state, action);
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const correction = attempt > 1 ? violations : undefined;
-    const turnResult = await handleTurn(state, action, correction);
+  // Partial apply：逐個驗證，留下合法的，skip 非法的（不拖垮整個 turn）
+  let probe = state;
+  const validChanges: typeof turnResult.stateChanges = [];
+  const skipped: string[] = [];
 
-    violations = validate(state, turnResult);
-    if (violations.length === 0) {
-      const updated = apply(state, turnResult);
-      await saveWorldState(uuid, updated);
-      return updated;
+  for (const sc of turnResult.stateChanges) {
+    const result = enforceStateChange(probe, sc);
+    if (result.valid && result.updatedState) {
+      probe = result.updatedState;
+      validChanges.push(sc);
+    } else {
+      skipped.push(`${sc.type}: ${result.reason ?? "rejected"}`);
     }
+  }
 
+  if (skipped.length > 0) {
     console.warn(
-      `processTurn attempt ${attempt}/3 invalid state changes for action ${JSON.stringify(action)}: ${violations.join(", ")}`,
+      `processTurn action ${JSON.stringify(action)} skipped: ${skipped.join("; ")}` +
+        ` (applied: ${validChanges.map((c) => c.type).join(", ") || "none"})`,
     );
   }
 
-  console.warn(
-    `All processTurn attempts failed for action ${JSON.stringify(action)}; falling back to 'Nothing happens.'`,
-  );
-  const fallback = applyFallback(state, action);
-  await saveWorldState(uuid, fallback);
-  return fallback;
+  // 用過濾後的合法 changes 走既有 apply（沿用 turnCount/history/checkWin 行為）
+  const cleanResult = { ...turnResult, stateChanges: validChanges };
+  const updated = apply(state, cleanResult);
+
+  await saveWorldState(uuid, updated);
+  return updated;
 }
 
 /** Load the user's active WorldState, or null if none exists. */
