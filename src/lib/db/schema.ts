@@ -2,7 +2,7 @@
 // Tables: users, worldStates
 // Phase 2 init — to be expanded as engine is ported
 
-import { pgTable, text, timestamp, jsonb, uuid } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, uuid, integer } from 'drizzle-orm/pg-core';
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -27,7 +27,20 @@ export const worldStates = pgTable('world_states', {
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 });
 
+export const shares = pgTable('shares', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  /** nanoid(10) public short code, e.g. "V1StGXR8_x" */
+  shareId: text('share_id').notNull().unique(),
+  clerkUserId: text('clerk_user_id').notNull(),
+  scenarioTitle: text('scenario_title').notNull().default(''),
+  quote: text('quote').notNull(),
+  turnCount: integer('turn_count').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type WorldStateRow = typeof worldStates.$inferSelect;
 export type NewWorldStateRow = typeof worldStates.$inferInsert;
+export type Share = typeof shares.$inferSelect;
+export type NewShare = typeof shares.$inferInsert;

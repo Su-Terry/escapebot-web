@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { UserButton } from "@clerk/nextjs";
-import { startGame, submitAction, resetGame } from "./actions";
+import { startGame, submitAction, resetGame, createShare } from "./actions";
 
 type Item = { id: string; name: string; isTakeable?: boolean };
 type Exit = { id: string; name: string; isLocked?: boolean };
@@ -18,6 +18,13 @@ export default function PlayPage() {
   const [sceneItems, setSceneItems] = useState<Item[]>([]);
   const [exits, setExits] = useState<Exit[]>([]);
   const [inventory, setInventory] = useState<Item[]>([]);
+  const [history, setHistory] = useState<{ action: string; narration: string }[]>([]);
+  const [scenarioTitle, setScenarioTitle] = useState("");
+  // Win screen state — index into the filtered narration list; null = default to last
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [shareId, setShareId] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   function applyView(v: Awaited<ReturnType<typeof startGame>>) {
     setNarration(v.narration || "（場景已生成，點下方按鈕開始探索）");
@@ -27,6 +34,8 @@ export default function PlayPage() {
     setSceneItems(v.sceneItems);
     setExits(v.exits);
     setInventory(v.inventory);
+    setHistory(v.history);
+    setScenarioTitle(v.scenarioTitle);
   }
 
   async function handleStart() {
@@ -73,8 +82,18 @@ export default function PlayPage() {
     setSceneItems([]);
     setExits([]);
     setInventory([]);
+    setHistory([]);
+    setScenarioTitle("");
+    setSelectedIndex(null);
+    setShareId(null);
+    setGenerating(false);
+    setCopied(false);
     setLoading(false);
   }
+
+  // Win screen derived values
+  const winNarrations = history.map((e) => e.narration).filter(Boolean);
+  const effectiveIndex = selectedIndex ?? winNarrations.length - 1;
 
   const btn: React.CSSProperties = {
     padding: "8px 14px",
@@ -120,7 +139,117 @@ export default function PlayPage() {
           <div style={{ fontSize: 12, color: "#999", marginBottom: 12 }}>Turn {turnCount}</div>
 
           {isWon ? (
-            <div style={{ padding: 16, background: "#e8f5e9", borderRadius: 8 }}>🎉 你通關了！</div>
+            <div style={{ padding: 20, background: "#f8f8f8", borderRadius: 12, marginTop: 8 }}>
+              <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🎉 你通關了！</div>
+              {scenarioTitle && (
+                <div style={{ fontSize: 13, color: "#888", marginBottom: 16 }}>{scenarioTitle}</div>
+              )}
+
+              <div style={{ fontSize: 13, color: "#555", marginBottom: 10 }}>
+                選一句金句做分享卡（tap 選，預設最後一句）：
+              </div>
+
+              {/* Narration picker */}
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                  maxHeight: 260,
+                  overflowY: "auto",
+                  marginBottom: 20,
+                }}
+              >
+                {winNarrations.map((n, i) => {
+                  const isSelected = i === effectiveIndex;
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        setSelectedIndex(i);
+                        setShareId(null);
+                        setCopied(false);
+                      }}
+                      style={{
+                        textAlign: "left",
+                        padding: "10px 14px",
+                        fontSize: 13,
+                        lineHeight: 1.6,
+                        borderRadius: 8,
+                        border: isSelected ? "2px solid #111" : "2px solid #e0e0e0",
+                        background: isSelected ? "#111" : "#fff",
+                        color: isSelected ? "#fff" : "#333",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {n}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Phase 1: generate share link */}
+              {!shareId && (
+                <button
+                  onClick={async () => {
+                    setGenerating(true);
+                    try {
+                      const result = await createShare(effectiveIndex);
+                      setShareId(result.shareId);
+                    } catch (e) {
+                      alert("產生分享連結失敗：" + (e as Error).message);
+                    }
+                    setGenerating(false);
+                  }}
+                  disabled={generating}
+                  style={{
+                    ...btn,
+                    background: "#111",
+                    color: "#fff",
+                    border: "none",
+                    minWidth: 120,
+                    opacity: generating ? 0.6 : 1,
+                  }}
+                >
+                  {generating ? "生成中…" : "產生分享連結"}
+                </button>
+              )}
+
+              {/* Phase 2: share actions (after shareId obtained) */}
+              {shareId && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    onClick={() => {
+                      const url = `${window.location.origin}/s/${shareId}`;
+                      navigator.clipboard.writeText(url).then(() => {
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 2000);
+                      });
+                    }}
+                    style={{ ...btn, background: "#111", color: "#fff", border: "none", minWidth: 100 }}
+                  >
+                    {copied ? "✓ 已複製！" : "複製分享連結"}
+                  </button>
+
+                  <a
+                    href={`/api/og?id=${shareId}`}
+                    download="escapebot-share.png"
+                    style={{ ...btn, textDecoration: "none", display: "inline-block" }}
+                  >
+                    下載卡片
+                  </a>
+
+                  <a
+                    href={`/s/${shareId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ ...btn, textDecoration: "none", display: "inline-block" }}
+                  >
+                    預覽卡片 →
+                  </a>
+                </div>
+              )}
+            </div>
           ) : (
             <>
               {/* 場景物件 */}

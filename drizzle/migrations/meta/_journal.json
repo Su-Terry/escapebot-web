@@ -15,6 +15,13 @@
       "when": 1778663675008,
       "tag": "0001_add_world_states_user_id_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1779885072335,
+      "tag": "0002_fixed_bloodaxe",
+      "breakpoints": true
     }
   ]
 }

@@ -38,6 +38,7 @@ All field names must match exactly. All id values must be unique across the enti
 
 {
   "sessionId": "<string — the player's username, passed to you in the user turn>",
+  "scenarioTitle": "<string — 4-12 繁體中文字，整個場景的氛圍/主題標題，例如「廢棄的深空研究站」「克蘇魯神殿遺跡」「煉金術師的秘密書房」，不能是任何單一房間名稱>",
   "currentLocationId": "<string — must be a key in locations, the player's starting room>",
   "locations": {
     "<location_id>": {
@@ -154,6 +155,7 @@ puzzle.description 必須包含 format hint, 例如:
 
 ### Description Style — STRICT
 字數上限 (超出視為違規):
+- scenarioTitle: 4-12 繁體中文字，場景整體氛圍標題，不可以是某個房間名稱
 - Location.description: 30-50 中文字
 - Item.description: 15-30 中文字
 - Puzzle.description: 15-30 中文字
@@ -420,6 +422,7 @@ export async function generateScenario(
 function level1Fallback(userId: string): WorldState {
   return {
     sessionId: userId,
+    scenarioTitle: "神秘的工作室",
     currentLocationId: "studio",
     locations: {
       studio: {

@@ -98,6 +98,8 @@ export const WorldStateSchema = z.object({
   winCondition: WinConditionSchema,
   turnCount: z.number().int().default(0),
   isWon: z.boolean().default(false),
+  /** Short atmospheric title for the whole scenario, e.g. 「廢棄的深空研究站」 */
+  scenarioTitle: z.string().default(""),
   /** [{action, narration}, …] */
   history: z.array(z.record(z.string(), z.unknown())).default([]),
 });

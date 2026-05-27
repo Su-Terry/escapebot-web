@@ -1,7 +1,5 @@
 import type { Location, StateChange, TurnResult, WorldState } from "./types";
 
-const MAX_HISTORY = 15;
-
 /**
  * 寬鬆 normalize：去除所有空白、常見標點、轉小寫。
  * 讓「黃藍紅」對上「黃 藍 紅」、「B,A,C」對上「B A C」。
@@ -112,6 +110,12 @@ function validateChange(
         !sc.attemptedSolution ||
         normalizeSolution(sc.attemptedSolution) !== normalizeSolution(puzzle.solution)
       ) {
+        console.warn(
+          `[solve_puzzle wrong-solution] puzzle=${sc.puzzleId}` +
+            ` attempted_raw=${JSON.stringify(sc.attemptedSolution)}` +
+            ` attempted_norm=${sc.attemptedSolution ? normalizeSolution(sc.attemptedSolution) : "null"}` +
+            ` solution_norm=${normalizeSolution(puzzle.solution)}`,
+        );
         v.push(`solve_puzzle: wrong solution for puzzle '${sc.puzzleId}'`);
       }
     }
@@ -122,8 +126,10 @@ function validateChange(
 
 /**
  * Apply all state changes and return a new WorldState. Assumes validate() returned [].
+ * action: the player's raw input for this turn — stored in history so the LLM
+ * can see Player: lines in subsequent turns.
  */
-export function apply(worldState: WorldState, turnResult: TurnResult): WorldState {
+export function apply(worldState: WorldState, turnResult: TurnResult, action = ""): WorldState {
   const ws = structuredClone(worldState);
 
   for (const sc of turnResult.stateChanges) {
@@ -132,7 +138,7 @@ export function apply(worldState: WorldState, turnResult: TurnResult): WorldStat
 
   ws.isWon = checkWin(ws);
   ws.turnCount += 1;
-  appendHistory(ws, turnResult.narration);
+  appendHistory(ws, turnResult.narration, action);
   return ws;
 }
 
@@ -173,10 +179,9 @@ function checkWin(ws: WorldState): boolean {
 }
 
 function appendHistory(ws: WorldState, narration: string, action = ""): void {
+  // No cap here — full history is kept in DB so players can pick any narration as a
+  // share-card quote.  LLM context is capped separately in turnHandler (MAX_HISTORY=15).
   ws.history.push({ action, narration });
-  if (ws.history.length > MAX_HISTORY) {
-    ws.history = ws.history.slice(-MAX_HISTORY);
-  }
 }
 
 /** Return a new WorldState with 'Nothing happens.' recorded and turn incremented. */
