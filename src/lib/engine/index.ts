@@ -56,6 +56,21 @@ export async function processTurn(clerkUserId: string, action: string): Promise<
       validChanges.push(sc);
     } else {
       skipped.push(`${sc.type}: ${result.reason ?? "rejected"}`);
+      if (sc.type === "solve_puzzle") {
+        console.warn(
+          `[solve_puzzle rejected] puzzleId=${sc.puzzleId} reason=${result.reason}` +
+            ` currentLoc=${probe.currentLocationId}` +
+            ` puzzleLoc=${sc.puzzleId ? (probe.puzzles[sc.puzzleId]?.locationId ?? "unknown") : "?"}` +
+            ` attempted=${JSON.stringify(sc.attemptedSolution)}`,
+        );
+      } else if (sc.type === "take_item") {
+        const item = sc.itemId ? probe.items[sc.itemId] : undefined;
+        console.warn(
+          `[take_item rejected] itemId=${sc.itemId} reason=${result.reason}` +
+            ` currentLoc=${probe.currentLocationId}` +
+            ` itemLoc=${item?.locationId ?? "unknown"}`,
+        );
+      }
     }
   }
 

@@ -51,7 +51,7 @@ Produce a TurnResult JSON:
 
 Use only ids that exist in the WorldState. Do not invent ids.
 
-move_player: toLocation must be in current location's connectedLocationIds.
+move_player: toLocation must be in current location's connectedLocationIds AND all puzzles listed in that location's lockedByPuzzleIds must be solved (isSolved=true). Do NOT emit move_player to a location with unsolved lockedByPuzzleIds — narrate "the way is locked" instead.
 take_item: itemId must be in current location's itemIds and isTakeable.
 use_item: itemId must be in player's inventory.
 move_item: itemId in current location; toLocation is a valid location id.

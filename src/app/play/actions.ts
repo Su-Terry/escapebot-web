@@ -10,10 +10,40 @@ function latestNarration(state: WorldState): string {
 }
 
 function toView(state: WorldState) {
+  const loc = state.locations[state.currentLocationId];
+
+  // 當前場景可見物件 — 以 item.locationId 為準（authoritative），避免 loc.itemIds 漏列物品
+  const sceneItems = Object.values(state.items)
+    .filter((item) => item.locationId === state.currentLocationId)
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      isTakeable: item.isTakeable,
+    }));
+
+  // 出口（連通的 location）
+  const exits = (loc?.connectedLocationIds ?? []).map((id) => {
+    const destLoc = state.locations[id];
+    const isLocked = (destLoc?.lockedByPuzzleIds ?? []).some(
+      (pid) => !state.puzzles[pid]?.isSolved,
+    );
+    return { id, name: destLoc?.name ?? id, isLocked };
+  });
+
+  // 背包
+  const inventory = state.inventory.map((id) => ({
+    id,
+    name: state.items[id]?.name ?? id,
+  }));
+
   return {
     narration: latestNarration(state),
     isWon: state.isWon,
     turnCount: state.turnCount,
+    locationName: loc?.name ?? "",
+    sceneItems,
+    exits,
+    inventory,
     started: true,
   };
 }

@@ -8,6 +8,8 @@ export const LocationSchema = z.object({
   description: z.string(),
   itemIds: z.array(z.string()).default([]),
   connectedLocationIds: z.array(z.string()).default([]),
+  /** Puzzle IDs that must all be solved before the player can enter this location */
+  lockedByPuzzleIds: z.array(z.string()).default([]),
 });
 export type Location = z.infer<typeof LocationSchema>;
 

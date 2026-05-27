@@ -10,7 +10,7 @@ function normalizeSolution(s: string): string {
   return s
     .trim()
     .toLowerCase()
-    .replace(/[\s、,，。.\-]/g, ""); // 去空白 + 中英標點
+    .replace(/[\s、,，。.\-_]/g, ""); // 去空白 + 中英標點 + 底線
 }
 
 /**
@@ -47,6 +47,16 @@ function validateChange(
       v.push(
         `move_player: '${sc.toLocation}' is not connected to '${ws.currentLocationId}'`,
       );
+    } else {
+      const destLoc = ws.locations[sc.toLocation];
+      const unsolvedLocks = (destLoc?.lockedByPuzzleIds ?? []).filter(
+        (pid) => !ws.puzzles[pid]?.isSolved,
+      );
+      if (unsolvedLocks.length > 0) {
+        v.push(
+          `move_player: '${sc.toLocation}' is locked — solve puzzles first: ${unsolvedLocks.join(", ")}`,
+        );
+      }
     }
   } else if (sc.type === "take_item") {
     if (!sc.itemId) {
@@ -55,8 +65,8 @@ function validateChange(
       v.push(`take_item: unknown item '${sc.itemId}'`);
     } else {
       const item = ws.items[sc.itemId];
-      if (!currentLoc.itemIds.includes(sc.itemId)) {
-        v.push(`take_item: '${sc.itemId}' is not in current location`);
+      if (item.locationId !== ws.currentLocationId) {
+        v.push(`take_item: '${sc.itemId}' is not in current location (item.locationId='${item.locationId}')`);
       } else if (ws.inventory.includes(sc.itemId)) {
         v.push(`take_item: '${sc.itemId}' already in inventory`);
       } else if (!item.isTakeable) {

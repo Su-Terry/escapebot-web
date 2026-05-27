@@ -45,7 +45,8 @@ All field names must match exactly. All id values must be unique across the enti
       "name": "<string — short display name>",
       "description": "<string — 30-50 中文字, 列出場所特徵和可互動物件, 不要文藝鋪墊>",
       "itemIds": ["<item_id>", ...],
-      "connectedLocationIds": ["<location_id>", ...]
+      "connectedLocationIds": ["<location_id>", ...],
+      "lockedByPuzzleIds": ["<puzzle_id>", ...]
     }
   },
   "items": {
@@ -103,6 +104,9 @@ All field names must match exactly. All id values must be unique across the enti
 - Locations must be connected bidirectionally (if A connects to B, B must connect to A).
 - One location is the starting location (currentLocationId).
 - One location is the win target. The win target must be reachable only after solving puzzles.
+- Use "lockedByPuzzleIds" to list puzzle IDs that must be solved before a player can ENTER that location. The win target MUST have "lockedByPuzzleIds" equal to "requiredSolvedPuzzleIds". Intermediate locked rooms also set this field. Rooms with no lock requirement use [].
+- "lockedByPuzzleIds" must only reference puzzle IDs defined in the "puzzles" dict.
+- CRITICAL: A puzzle listed in location B's "lockedByPuzzleIds" MUST have its "locationId" set to a room the player can access WITHOUT entering B (e.g., the room just before B, or an earlier room). NEVER place a locking puzzle inside the room it locks — the player cannot enter to solve it, creating an unbreakable deadlock. Example: if "seed-vault" is locked by "gate-control", then gate-control.locationId must be "main-control-room" (or another accessible room), NOT "seed-vault".
 
 ### Items
 - Create 4 to 8 items total; at least 2 must be takeable (isTakeable: true).
@@ -110,6 +114,7 @@ All field names must match exactly. All id values must be unique across the enti
 - Non-takeable: furniture or large objects (desks, bookcases, machines).
 - Locked items (isLocked: true) need another item in inventory before they can be taken.
 - All items must start in a location (not inventory). inventory starts as [].
+- CRITICAL: Every item must appear in BOTH places: (a) items[X].locationId = "room-id", AND (b) locations["room-id"].itemIds includes X. Omitting an item from itemIds makes it permanently invisible and untakeable. There are no sub-containers — items sit directly in a location's itemIds list.
 
 ### Puzzles
 - Create 2 to 3 puzzles.
@@ -177,7 +182,8 @@ WRONG — key does not match id:
   }
 
 Every cross-reference (currentLocationId, item.locationId, puzzle.locationId,
-connectedLocationIds, itemIds, unlockItemId, rewardItemId, requiredSolvedPuzzleIds)
+connectedLocationIds, itemIds, unlockItemId, rewardItemId, requiredSolvedPuzzleIds,
+lockedByPuzzleIds)
 must use the kebab-case id strings, NOT display names.
 
 ## Referential Integrity (CRITICAL — check before responding)
@@ -192,6 +198,9 @@ must use the kebab-case id strings, NOT display names.
 8. All puzzle.locationId values are keys in locations.
 9. If puzzle.rewardItemId is set, it is a key in items.
 10. inventory is empty [].
+11. All ids in each location's lockedByPuzzleIds are keys in puzzles.
+12. For every (locId, puzzleId) pair where puzzleId is in locId's lockedByPuzzleIds: puzzles[puzzleId].locationId must NOT equal locId (the puzzle must not be inside the room it locks).
+13. Bidirectional item consistency: for every item X where items[X].locationId = "room-id", locations["room-id"].itemIds must include X. Check every item — none may be omitted from its location's itemIds.
 
 Any violation causes rejection and retry. Verify all references before responding.`;
 
@@ -222,6 +231,50 @@ export function normalizeWorldStateDict(
     result[field] = normalized;
   }
   return result;
+}
+
+// ── Scenario validation ───────────────────────────────────────────────────────
+
+/**
+ * Auto-repair bidirectional item consistency: if item.locationId points to a location
+ * that doesn't list the item in itemIds, add it. Returns the number of repairs made.
+ */
+function repairItemConsistency(ws: WorldState): number {
+  let repairs = 0;
+  for (const [itemId, item] of Object.entries(ws.items)) {
+    if (item.locationId === "inventory") continue;
+    const loc = ws.locations[item.locationId];
+    if (loc && !loc.itemIds.includes(itemId)) {
+      loc.itemIds.push(itemId);
+      repairs++;
+    }
+  }
+  return repairs;
+}
+
+/**
+ * Validate game-logic constraints not expressible in the Zod schema.
+ * Only checks true deadlocks (puzzle locked inside its own room) — these cannot be
+ * auto-repaired and require regeneration. Bidirectional item consistency is handled
+ * by repairItemConsistency() before this is called.
+ * Returns a list of violation strings; empty means valid.
+ */
+function validateScenarioLogic(ws: WorldState): string[] {
+  const violations: string[] = [];
+
+  // Deadlock: puzzle inside the room it locks
+  for (const [locId, loc] of Object.entries(ws.locations)) {
+    for (const puzzleId of loc.lockedByPuzzleIds) {
+      const puzzle = ws.puzzles[puzzleId];
+      if (puzzle && puzzle.locationId === locId) {
+        violations.push(
+          `Deadlock: puzzle '${puzzleId}' is inside '${locId}' which it locks — player can never solve it`,
+        );
+      }
+    }
+  }
+
+  return violations;
 }
 
 // ── Usage logging ─────────────────────────────────────────────────────────────
@@ -290,6 +343,18 @@ export async function generateScenario(
       try {
         const normalized = normalizeWorldStateDict(raw as Record<string, unknown>);
         const ws = validatedWorldStateSchema.parse({ ...normalized, sessionId: userId });
+        const repairs = repairItemConsistency(ws);
+        if (repairs > 0) {
+          console.warn(`scenarioGenerator attempt ${attempt} auto-repaired ${repairs} item(s) missing from location itemIds`);
+        }
+        const logicViolations = validateScenarioLogic(ws);
+        if (logicViolations.length > 0) {
+          console.warn(
+            `scenarioGenerator attempt ${attempt} logic violations:`,
+            logicViolations,
+          );
+          continue;
+        }
         console.log(
           `scenarioGenerator: success attempt=${attempt}` +
             ` locations=${Object.keys(ws.locations).length}` +
@@ -309,12 +374,24 @@ export async function generateScenario(
         try {
           const raw = normalizeWorldStateDict(JSON.parse(err.text) as Record<string, unknown>);
           const ws = validatedWorldStateSchema.parse({ ...raw, sessionId: userId });
-          console.warn(
-            `scenarioGenerator attempt ${attempt} recovered via normalize` +
-              ` locations=${Object.keys(ws.locations).length}` +
-              ` items=${Object.keys(ws.items).length}`,
-          );
-          return ws;
+          const repairs = repairItemConsistency(ws);
+          if (repairs > 0) {
+            console.warn(`scenarioGenerator attempt ${attempt} recovery auto-repaired ${repairs} item(s) missing from location itemIds`);
+          }
+          const logicViolations = validateScenarioLogic(ws);
+          if (logicViolations.length > 0) {
+            console.warn(
+              `scenarioGenerator attempt ${attempt} recovery logic violations:`,
+              logicViolations,
+            );
+          } else {
+            console.warn(
+              `scenarioGenerator attempt ${attempt} recovered via normalize` +
+                ` locations=${Object.keys(ws.locations).length}` +
+                ` items=${Object.keys(ws.items).length}`,
+            );
+            return ws;
+          }
         } catch (normalizeErr) {
           console.warn(
             `scenarioGenerator attempt ${attempt} normalize recovery failed:`,
@@ -356,6 +433,7 @@ function level1Fallback(userId: string): WorldState {
           "The low white ceiling feels close. You need to escape.",
         itemIds: ["recliner", "office-desk", "notebook"],
         connectedLocationIds: ["corridor"],
+        lockedByPuzzleIds: [],
       },
       corridor: {
         id: "corridor",
@@ -363,6 +441,7 @@ function level1Fallback(userId: string): WorldState {
         description: "The corridor outside the studio. You made it.",
         itemIds: [],
         connectedLocationIds: ["studio"],
+        lockedByPuzzleIds: ["door-lock"],
       },
     },
     items: {

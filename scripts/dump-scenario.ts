@@ -1,4 +1,5 @@
-import { loadState } from "../src/lib/engine";
+import { config } from "dotenv";
+config({ path: ".env.local" });
 
 const CLERK_USER_ID = process.argv[2];
 
@@ -8,6 +9,8 @@ if (!CLERK_USER_ID) {
 }
 
 async function main() {
+  const { loadState } = await import("../src/lib/engine");
+
   const state = await loadState(CLERK_USER_ID);
   if (!state) {
     console.log("No state found for", CLERK_USER_ID);
