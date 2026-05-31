@@ -16,13 +16,13 @@ type Props = {
 };
 
 type BunPhase =
-  | 'at_launch'   // sitting at launch pad, no body
-  | 'dragging'    // player pulling it back
-  | 'in_flight'   // physics body live, flying
-  | 'returning'   // missed: arc tween back to launch pad (M3.2 entry point for tail-sweep)
+  | 'at_launch'   // sitting at launch pad
+  | 'dragging'    // player pulling back
+  | 'in_flight'   // analytic 3D trajectory, no matter.js body
+  | 'returning'   // missed: arc tween back to launch pad
   | 'eating'      // consumed, LLM thinking
-  | 'flying_out'  // reply bun Bezier arc, no body yet
-  | 'on_ground';  // reply bun with live physics body
+  | 'flying_out'  // reply bun Bezier arc
+  | 'on_ground';  // reply bun with live XZ scatter body
 
 type CatPhase = 'idle' | 'chewing' | 'spitting';
 
@@ -36,14 +36,17 @@ interface Bun {
   sprite: Sprite;
   isReply: boolean;
   body: MB | null;
-  // Consecutive low-speed frames; resets on any speed spike (stable-stop guard)
   slowFrames: number;
-  // Bezier arc fields (reply buns, flying_out only)
-  fromX: number; fromY: number;
+  // in_flight analytic tracking
+  wx0: number; wy0: number;   // world position at launch (wz0 = 0)
+  vx: number; vy: number; vz: number;
+  flightStart: number;
+  // Bezier arc (reply buns, flying_out)
+  fromX: number; fromY: number; fromWZ: number;
   ctrlX: number; ctrlY: number;
-  toX: number;   toY: number;
+  toX: number;   toY: number;   toWX: number; toWZ: number;
   dur: number;   startAt: number;
-  // Return-to-launch fields (player buns, 'returning' phase — M3.2 / M3.2.5 hook)
+  // Return arc (player buns, returning)
   retFromX: number; retFromY: number;
   retCtrlX: number; retCtrlY: number;
   retStartAt: number;
@@ -77,7 +80,7 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
       ]);
       if (cancelled) return;
 
-      const { Engine, Bodies, Body, Composite, Events, World } = Matter;
+      const { Engine, Bodies, Body, Composite, World } = Matter;
 
       // ── PixiJS app ────────────────────────────────────────
       PIXI.TextureSource.defaultOptions.scaleMode = 'nearest';
@@ -92,11 +95,12 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
       });
       if (cancelled) { app.destroy(true); return; }
 
-      // ── Matter.js engine ─────────────────────────────────
+      // ── Matter.js engine (XZ scatter only; no gravity) ───
       const engine = Engine.create();
+      engine.gravity.x = 0;
+      engine.gravity.y = 0;
 
       destroyFn = () => {
-        Events.off(engine, 'collisionStart', onCollisionStart as Parameters<typeof Events.on>[2]);
         World.clear(engine.world, false);
         Engine.clear(engine);
         app.destroy(true);
@@ -113,69 +117,82 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
       if (cancelled) { destroyFn(); return; }
 
       // ── Physics / layout constants ────────────────────────
-      // GRAVITY in px/ms² — must match engine.gravity.scale so
-      // the analytic trajectory formula stays consistent with matter.js.
+      // GRAVITY in px/ms²; unchanged from previous version.
       const GRAVITY      = 0.00045;
-      const LAUNCH_SCALE = 0.016;
+      const LAUNCH_SCALE = 0.020;
       const MAX_PULL     = 190;
-      // Fixed physics step (ms).  Body.setVelocity takes px/step, so
-      // converting vx/vy (px/ms) → px/step requires multiplying by FIXED_STEP.
       const FIXED_STEP   = 1000 / 60;
-      // Stable-stop thresholds: 45 consecutive frames < 0.5 px/step ≈ 750 ms
-      // of truly low speed before triggering the return-to-launch arc.
-      const SLOW_THRESHOLD = 0.5;
-      const SLOW_FRAMES    = 45;
-      // Return-to-launch tween duration (ms). Fast enough to feel "咻", long enough to read.
-      const RETURN_DUR     = 380;
+      const RETURN_DUR   = 380;
+
+      // ── True 3D projection ────────────────────────────────
+      // Camera at (W/2, bgGroundY, -CAM_DIST) looking toward +Z.
+      // scale(wz) = CAM_DIST/(wz+CAM_DIST): z=0→1.0, z=CAT_Z→0.75.
+      const CAM_DIST      = 600;
+      const CAT_Z         = 200;    // cat world-Z; CAM_DIST/3 → scale=0.75
+      const HIT_RADIUS_3D = 55;     // world-unit sphere; depth-locked ≈ horizontal tolerance
 
       const CAT_SCALE = 2;
-      const BUN_SCALE = 1.0;           // smaller buns → less ground clutter, launch clears the pile
+      const BUN_SCALE = 1.0;
       const groundY   = H - 44;
-      // bunRadius from measured visual content width (41px of 100px sprite).
-      const bunRadius = Math.max(Math.ceil((41 * BUN_SCALE) / 2), 12);
-      const BUN_VISUAL_YOFFSET = bunRadius - 1;
-      // hitArea circle centre y in sprite local coords (anchor 0.5); derived from measured row 34.5.
-      const bunHitCY = Math.round(((18 + 51) / 2 - 50) * BUN_SCALE);
+      const bgGroundY = groundY - 100;  // CAM_Y: camera eye / horizon line
+      const CAM_Y     = bgGroundY;
+      const CAM_X     = Math.round(W / 2);
 
-      const launchX = 110;
-      // Raised launch point so the parabola naturally clears ground-level bun piles.
-      const launchY = groundY - 100;
+      const bunRadius     = Math.max(Math.ceil((41 * BUN_SCALE) / 2), 12);
+      const bunHitCY      = Math.round(((18 + 51) / 2 - 50) * BUN_SCALE);
 
+      const launchX  = CAM_X;
+      const launchY  = groundY - 40;
+
+      // catWY: reverse-project catCenterY_screen to world Y at CAT_Z.
+      // catCenterY_screen kept at groundY-200 (same as previous physics sensor centre).
+      // Solve: CAM_Y + (catWY - CAM_Y) * 0.75 = groundY - 200.
+      const catCenterYScreen = groundY - 200;
+      const catWY = Math.round(CAM_Y + (catCenterYScreen - CAM_Y) / 0.75);
+      const catWX = CAM_X;
+
+      // catVisualScale: sprite scale at depth CAT_Z.
+      const catVisualScale = CAT_SCALE * (CAM_DIST / (CAT_Z + CAM_DIST));  // 2 * 0.75 = 1.5
       const catW = 100 * CAT_SCALE;
-      const catH = 100 * CAT_SCALE;
-      const catX = W - catW - 60;
-      const catY = groundY - catH;
-      const catCenterX = catX + catW * 0.5;
-      const catCenterY = catY + catH * 0.5;
-      const mouthX = catX + catW * 0.28;
-      const mouthY = catY + catH * 0.38;
 
-      const scatterW = Math.max(catX - 80, 300);
+      let mouthX = CAM_X;
+      let mouthY = catCenterYScreen;
 
-      // ── Configure engine gravity to match hand-rolled GRAVITY ─
-      // matter.js applies acceleration = gravity.y * gravity.scale per step.
-      // With gravity.y=1 and gravity.scale=GRAVITY: Δvy per step = GRAVITY * FIXED_STEP²
-      // which equals our old: vy += GRAVITY * dt (both in px/ms, dt=FIXED_STEP).
-      engine.gravity.y = 1;
-      engine.gravity.scale = GRAVITY;
+      // ── Projection ────────────────────────────────────────
+      function project(wx: number, wy: number, wz: number) {
+        const scale = CAM_DIST / (wz + CAM_DIST);
+        return {
+          sx: CAM_X + (wx - CAM_X) * scale,
+          sy: CAM_Y + (wy - CAM_Y) * scale,
+          scale,
+        };
+      }
 
-      // ── Static world bodies ───────────────────────────────
-      const groundBody = Bodies.rectangle(W / 2, groundY + 25, W + 200, 50, {
-        isStatic: true, label: 'ground', friction: 0.85, restitution: 0.1,
-      });
-      const wallL = Bodies.rectangle(-25, H / 2, 50, H + 200, {
-        isStatic: true, label: 'wall', restitution: 0.2,
-      });
-      const wallR = Bodies.rectangle(W + 25, H / 2, 50, H + 200, {
-        isStatic: true, label: 'wall', restitution: 0.2,
-      });
-      // Cat sensor: registers collisions but produces no reaction force.
-      const catSensor = Bodies.rectangle(catCenterX, catCenterY, catW * 0.65, catH * 0.65, {
-        isStatic: true, isSensor: true, label: 'cat',
-      });
-      Composite.add(engine.world, [groundBody, wallL, wallR, catSensor]);
+      // ── 3D Hit Detection ──────────────────────────────────
+      function checkHit3D(wx: number, wy: number, wz: number): boolean {
+        const dx = wx - catWX, dy = wy - catWY, dz = wz - CAT_Z;
+        return dx * dx + dy * dy + dz * dz < HIT_RADIUS_3D * HIT_RADIUS_3D;
+      }
 
-      // ── Mutable scene state ───────────────────────────────
+      // ── Depth-lock: compute vz so bun reaches CAT_Z at t_hit ─
+      // wy0: actual world Y at launch (may differ from launchY if bun pulled down).
+      // Returns null when throw is SHORT (arc apex below catWY).
+      function computeVz(vy: number, wy0: number): number | null {
+        const deltaY = wy0 - catWY;        // > 0: bun starts below cat (Y-down)
+        const D = vy * vy - 2 * GRAVITY * deltaY;
+        if (D < 0) return null;             // SHORT
+        const t_hit = (-vy - Math.sqrt(D)) / GRAVITY;
+        return CAT_Z / t_hit;
+      }
+
+      // ── XZ scatter walls (body.x=worldX, body.y=worldZ) ──
+      const wallL    = Bodies.rectangle(-25,    150, 50, 600, { isStatic: true, label: 'wall', restitution: 0.2 });
+      const wallR    = Bodies.rectangle(W + 25, 150, 50, 600, { isStatic: true, label: 'wall', restitution: 0.2 });
+      const wallNear = Bodies.rectangle(W / 2, -25, W + 200, 50, { isStatic: true, label: 'wall', restitution: 0.1 });
+      const wallFar  = Bodies.rectangle(W / 2, 285, W + 200, 50, { isStatic: true, label: 'wall', restitution: 0.1 });
+      Composite.add(engine.world, [wallL, wallR, wallNear, wallFar]);
+
+      // ── Scene state ───────────────────────────────────────
       const buns: Bun[] = [];
       let bunId = 0;
       let catBusy = false;
@@ -188,80 +205,56 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
       let physAccum = 0;
       let latestReplyBunId: number | null = null;
 
-      // ── Collision: player bun → cat sensor ───────────────
-      // Store callback so we can unregister it precisely in cleanup.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      function onCollisionStart(evt: any) {
-        for (const { bodyA, bodyB } of (evt.pairs as { bodyA: MB; bodyB: MB }[])) {
-          let playerBody: MB | null = null;
-          if (bodyA.label === 'cat'      && bodyB.label === 'playerBun') playerBody = bodyB;
-          else if (bodyB.label === 'cat' && bodyA.label === 'playerBun') playerBody = bodyA;
-          if (!playerBody) continue;
-
-          const bun = buns.find(b => b.body === playerBody);
-          if (bun && bun.phase === 'in_flight' && !catBusy) {
-            triggerEat(bun);
-          }
-        }
-      }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      Events.on(engine, 'collisionStart', onCollisionStart as any);
-
-      // ── PIXI scene ────────────────────────────────────────
-      // Layer 1 — Sky/background gradient (replace with bg sprite in future)
+      // ── PIXI layers ───────────────────────────────────────
       const bgLayer: PixiGraphics = new PIXI.Graphics();
       const skyGrad = new PIXI.FillGradient(0, 0, 0, groundY);
-      skyGrad.addColorStop(0, 0xfff9f2);   // warm cream at top
-      skyGrad.addColorStop(1, 0xf0dfc8);   // slightly deeper warm at horizon
+      skyGrad.addColorStop(0, 0xfff9f2);
+      skyGrad.addColorStop(1, 0xf0dfc8);
       bgLayer.rect(0, 0, W, groundY).fill(skyGrad);
       app.stage.addChild(bgLayer);
 
-      // Layer 2 — Ground fill (replace with textured sprite in future)
       const groundLayer: PixiGraphics = new PIXI.Graphics();
-      groundLayer.rect(0, groundY, W, H - groundY).fill(0xc8935a);  // warm earth
-      groundLayer.rect(0, groundY, W, 5).fill(0xd9a878);            // horizon highlight strip
+      groundLayer.rect(0, bgGroundY, W, H - bgGroundY).fill(0xc8935a);
+      groundLayer.rect(0, groundY, W, 5).fill(0xd9a878);
       app.stage.addChild(groundLayer);
 
-      // Layer 3 — Shadow layer; cleared and redrawn every frame (keep this logic when swapping art)
       const shadowLayer: PixiGraphics = new PIXI.Graphics();
       app.stage.addChild(shadowLayer);
 
-      // Tall slingshot: junction just below pocket, arms spread wide, stem buried deep.
-      const FORK_JOIN  = { x: launchX,      y: launchY - 12 };
-      const FORK_LEFT  = { x: launchX - 30, y: launchY - 80 };
-      const FORK_RIGHT = { x: launchX + 30, y: launchY - 80 };
-      const FORK_BASE  = { x: launchX,      y: groundY + 55 };  // long stem, deep in earth
+      const FORK_JOIN  = { x: launchX,      y: launchY - 8  };
+      const FORK_LEFT  = { x: launchX - 20, y: launchY - 35 };
+      const FORK_RIGHT = { x: launchX + 20, y: launchY - 35 };
+      const FORK_BASE  = { x: launchX,      y: groundY + 55 };
 
       const sling: PixiGraphics = new PIXI.Graphics();
-      // Main stem — thick, planted deep into the ground
       sling.moveTo(FORK_JOIN.x, FORK_JOIN.y).lineTo(FORK_BASE.x, FORK_BASE.y)
            .stroke({ color: 0x6b3d1e, width: 11, cap: 'round' });
-      // Fork arms
       sling.moveTo(FORK_JOIN.x, FORK_JOIN.y).lineTo(FORK_LEFT.x, FORK_LEFT.y)
            .stroke({ color: 0x6b3d1e, width: 8, cap: 'round' });
       sling.moveTo(FORK_JOIN.x, FORK_JOIN.y).lineTo(FORK_RIGHT.x, FORK_RIGHT.y)
            .stroke({ color: 0x6b3d1e, width: 8, cap: 'round' });
-      // Fork tip knobs
       sling.circle(FORK_LEFT.x, FORK_LEFT.y, 7).fill(0x6b3d1e);
       sling.circle(FORK_RIGHT.x, FORK_RIGHT.y, 7).fill(0x6b3d1e);
       app.stage.addChild(sling);
 
-      // cat-idle last content row = 63 (measured). Shift sprite down so visual feet hit groundY.
-      const catSpriteY = groundY - 63 * CAT_SCALE;
+      // Cat: same visual positioning (feet at bgGroundY, scale=1.5).
+      const catSpriteY = bgGroundY - 63 * catVisualScale;
       const cat: Sprite = new PIXI.Sprite(texIdle);
-      cat.scale.set(CAT_SCALE);
+      cat.scale.set(catVisualScale);
       cat.anchor.set(0);
-      cat.x = catX; cat.y = catSpriteY;
-      app.stage.addChild(cat);
+      cat.x = Math.round(W / 2 - 33 * catVisualScale);
+      cat.y = catSpriteY;
+      mouthX = cat.x + Math.round(0.28 * 100 * catVisualScale);
+      mouthY = catSpriteY + Math.round(0.38 * 100 * catVisualScale);
+      app.stage.addChildAt(cat, app.stage.getChildIndex(sling));
 
       const traj: PixiGraphics = new PIXI.Graphics();
       app.stage.addChild(traj);
 
-      // Outline layer: always kept on top by re-raising after each bun sprite addChild.
       const outlineLayer: PixiGraphics = new PIXI.Graphics();
       app.stage.addChild(outlineLayer);
 
-      // ── Trajectory preview (analytic, matches physics gravity) ─
+      // ── Trajectory preview (3D analytic + depth-lock) ────
       function drawTrajectory(vx: number, vy: number, sx: number, sy: number) {
         traj.clear();
         traj.moveTo(FORK_LEFT.x, FORK_LEFT.y).lineTo(sx, sy)
@@ -269,37 +262,56 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
         traj.moveTo(FORK_RIGHT.x, FORK_RIGHT.y).lineTo(sx, sy)
             .stroke({ color: 0xcc8844, width: 3, alpha: 0.8, cap: 'round' });
 
-        const SAMPLE = 50;
-        const MAX_STEPS = 40;
-        const catHitR = catW * 0.325; // matches sensor half-width
+        const vz = computeVz(vy, sy);   // sy = wy0 at z=0
+
+        if (vz === null) {
+          // SHORT: a few red dots, no landing shadow
+          for (let step = 1; step <= 8; step++) {
+            const t = step * 50;
+            const wx = sx + vx * t;
+            const wy = sy + vy * t + 0.5 * GRAVITY * t * t;
+            if (wy > groundY + 20) break;
+            const { sx: px, sy: py } = project(wx, wy, 0);
+            traj.circle(px, py, 4).fill({ color: 0xff3300, alpha: (1 - step / 8) * 0.7 });
+          }
+          return;
+        }
+
+        const SAMPLE = 50, MAX_STEPS = 40;
         let willHit = false;
         for (let step = 1; step <= MAX_STEPS; step++) {
           const t  = step * SAMPLE;
-          const px = sx + vx * t;
-          const py = sy + vy * t + 0.5 * GRAVITY * t * t;
-          if (px < -20 || px > W + 20 || py > groundY + 20) break;
-          const near  = Math.hypot(px - catCenterX, py - catCenterY) < catHitR;
+          const wx = sx + vx * t;
+          const wy = sy + vy * t + 0.5 * GRAVITY * t * t;
+          const wz = vz * t;
+          if (wx < -20 || wx > W + 20 || wy > groundY + 20) break;
+          const { sx: px, sy: py } = project(wx, wy, wz);
+
+          const near = checkHit3D(wx, wy, wz);
           const alpha = (1 - step / MAX_STEPS) * 0.95;
           traj.circle(px, py, near ? 7 : 5).fill({ color: near ? 0xff5500 : 0xffcc44, alpha });
           if (near) { willHit = true; break; }
+
+          if (wy >= groundY) {
+            // Show landing shadow (missed cat, hit ground)
+            const { sx: lx, sy: ly, scale: ls } = project(wx, groundY, wz);
+            traj.ellipse(lx, ly, bunRadius * 0.8 * ls, 3 * ls).fill({ color: 0x3d1a00, alpha: 0.38 });
+            break;
+          }
         }
         if (willHit) {
-          traj.circle(catCenterX, catCenterY, catW * 0.325 + 10)
+          traj.circle(catWX, catCenterYScreen, (HIT_RADIUS_3D * 0.75) + 10)
               .stroke({ color: 0xff5500, width: 3, alpha: 0.75 });
         }
       }
 
-      // ── Return a missed player bun to the launch pad (M3.2) ─
-      // This is the canonical entry point for the "return" behaviour.
-      // M3.2.5 will insert a cat-tail-sweep animation here before (or instead of)
-      // this arc, or call this after the sweep completes.
+      // ── Return a missed player bun to the launch pad ──────
       function returnToLaunch(bun: Bun) {
         if (bun.body) { Composite.remove(engine.world, bun.body); bun.body = null; }
-        bun.retFromX  = bun.sprite.x;
-        bun.retFromY  = bun.sprite.y;
-        // Control point arcs over and upward toward the slingshot.
-        bun.retCtrlX  = (bun.sprite.x + launchX) / 2;
-        bun.retCtrlY  = Math.min(bun.sprite.y, launchY) - 90;
+        bun.retFromX   = bun.sprite.x;
+        bun.retFromY   = bun.sprite.y;
+        bun.retCtrlX   = (bun.sprite.x + launchX) / 2;
+        bun.retCtrlY   = Math.min(bun.sprite.y, launchY) - 90;
         bun.retStartAt = performance.now();
         bun.slowFrames = 0;
         bun.sprite.cursor  = 'default';
@@ -308,21 +320,7 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
         bun.phase = 'returning';
       }
 
-      // ── Create a physics circle body with initial velocity ─
-      // vx/vy are in px/ms (our game units); convert to px/step for matter.js.
-      function makeBunBody(x: number, y: number, vx: number, vy: number, label: string): MB {
-        const body = Bodies.circle(x, y, bunRadius, {
-          restitution: 0.28,
-          friction: 0.70,
-          frictionAir: 0,   // 0 = pure parabola; matches the analytic trajectory formula exactly
-          label,
-        });
-        Composite.add(engine.world, body);
-        Body.setVelocity(body, { x: vx * FIXED_STEP, y: vy * FIXED_STEP });
-        return body;
-      }
-
-      // ── Eat a player bun (called on sensor collision) ─────
+      // ── Eat a player bun ──────────────────────────────────
       async function triggerEat(bun: Bun) {
         bun.phase = 'eating';
         if (bun.body) { Composite.remove(engine.world, bun.body); bun.body = null; }
@@ -333,7 +331,7 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
         catPhase = 'chewing';
         setBusyRef.current(true);
         cat.texture = texHit;
-        cat.scale.set(CAT_SCALE);
+        cat.scale.set(catVisualScale);
         chewMs = 0;
 
         let result: ActionResult;
@@ -348,28 +346,36 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
         if (result.isWon) setTimeout(() => onWinRef.current(), 900);
       }
 
-      // ── Spit a reply bun: Bezier arc then physics body ────
+      // ── Spit a reply bun (Bezier arc → XZ scatter body) ──
       function spitBun(narration: string) {
-        // Random target X; physics handles stacking, no slot math needed.
-        const landX = 50 + Math.random() * scatterW * 0.85;
-        // End Bezier at bunRadius above groundY so the spawned body sits
-        // exactly on the ground surface (center = groundY - bunRadius).
-        const landY = groundY - bunRadius;
+        // Landing near foreground so buns are large enough to tap.
+        const toWZ = Math.random() * 50;
+        const toWX = Math.round(W / 3 + Math.random() * (W / 3));
+        // toY: sprite.y when on_ground — visual content bottom (row 51) at shadow (groundY).
+        // anchor(0.5) → content-bottom offset = (51−50)×scale = 1×scale below sprite.y.
+        const { sx: toX, sy: toShadowY, scale: toScale } = project(toWX, groundY, toWZ);
+        const toY = toShadowY - 1 * BUN_SCALE * toScale;
+
+        // Cat mouth world coords (approximate; mouth is near cat depth).
+        const catScale = CAM_DIST / (CAT_Z + CAM_DIST);
+        const mouthWX = CAM_X + (mouthX - CAM_X) / catScale;
+        const mouthWY = CAM_Y + (mouthY - CAM_Y) / catScale;
 
         const sprite = new PIXI.Sprite(texBun) as Sprite;
-        sprite.scale.set(BUN_SCALE);
+        sprite.scale.set(BUN_SCALE * catScale);
         sprite.anchor.set(0.5);
         sprite.x = mouthX; sprite.y = mouthY;
         app.stage.addChild(sprite);
-        app.stage.addChild(outlineLayer); // keep outline layer above all bun sprites
+        app.stage.addChild(outlineLayer);
 
         const bun: Bun = {
           id: bunId++, action: '', narration, phase: 'flying_out',
           sprite, isReply: true,
           body: null, slowFrames: 0,
-          fromX: mouthX, fromY: mouthY,
-          ctrlX: (mouthX + landX) / 2, ctrlY: mouthY - 120,
-          toX: landX, toY: landY,
+          wx0: mouthWX, wy0: mouthWY, vx: 0, vy: 0, vz: 0, flightStart: 0,
+          fromX: mouthX, fromY: mouthY, fromWZ: CAT_Z,
+          ctrlX: (mouthX + toX) / 2, ctrlY: mouthY - 120,
+          toX, toY, toWX, toWZ,
           dur: 780, startAt: performance.now(),
           retFromX: 0, retFromY: 0, retCtrlX: 0, retCtrlY: 0, retStartAt: 0,
         };
@@ -378,19 +384,21 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
 
         sprite.eventMode = 'static';
         sprite.cursor = 'pointer';
-        // Restrict hover hit area to visual content only (measured: cols 28-68, rows 18-51).
-        // bunHitCY = (34.5−50)×BUN_SCALE in local coords. Radius = bunRadius (visual half-width).
         sprite.hitArea = new PIXI.Circle(-3, bunHitCY, bunRadius);
         sprite.on('pointerover', () => {
-          if (bun.phase === 'on_ground') bun.sprite.scale.set(BUN_SCALE * 1.28);
+          if (bun.phase !== 'on_ground') return;
+          const wz_b = bun.body ? bun.body.position.y : bun.toWZ;
+          bun.sprite.scale.set(BUN_SCALE * (CAM_DIST / (wz_b + CAM_DIST)) * 1.28);
         });
         sprite.on('pointerout', () => {
-          if (bun.phase === 'on_ground') bun.sprite.scale.set(BUN_SCALE);
+          if (bun.phase !== 'on_ground') return;
+          const wz_b = bun.body ? bun.body.position.y : bun.toWZ;
+          bun.sprite.scale.set(BUN_SCALE * (CAM_DIST / (wz_b + CAM_DIST)));
         });
 
         catPhase = 'spitting';
         cat.texture = texHit;
-        cat.scale.set(CAT_SCALE);
+        cat.scale.set(catVisualScale);
       }
 
       // ── Spawn a player bun at the launch pad ─────────────
@@ -404,13 +412,15 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
         sprite.eventMode = 'static';
         sprite.cursor = 'grab';
         app.stage.addChild(sprite);
-        app.stage.addChild(outlineLayer); // keep outline layer above all bun sprites
+        app.stage.addChild(outlineLayer);
 
         const bun: Bun = {
           id: bunId++, action, narration: '', phase: 'at_launch',
           sprite, isReply: false,
           body: null, slowFrames: 0,
-          fromX: 0, fromY: 0, ctrlX: 0, ctrlY: 0, toX: 0, toY: 0, dur: 0, startAt: 0,
+          wx0: launchX, wy0: launchY, vx: 0, vy: 0, vz: 0, flightStart: 0,
+          fromX: 0, fromY: 0, fromWZ: 0, ctrlX: 0, ctrlY: 0,
+          toX: 0, toY: 0, toWX: 0, toWZ: 0, dur: 0, startAt: 0,
           retFromX: 0, retFromY: 0, retCtrlX: 0, retCtrlY: 0, retStartAt: 0,
         };
         buns.push(bun);
@@ -434,20 +444,16 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
           bun.sprite.scale.set(BUN_SCALE * 1.22);
         });
 
-        // First-bun slingshot hint animation
+        // First-bun hint demo
         if (firstBunDemo) {
           firstBunDemo = false;
-          const DELAY = 800;
-          const PULL_DUR = 550;
-          const SNAP_DUR = 320;
+          const DELAY = 800, PULL_DUR = 550, SNAP_DUR = 320;
           const DX = -32, DY = 22;
           let elapsed = -DELAY;
-
           const demoFn = () => {
             if (bun.phase !== 'at_launch' || cancelled) { app.ticker.remove(demoFn); traj.clear(); return; }
             elapsed += app.ticker.deltaMS;
             if (elapsed < 0) return;
-
             if (elapsed < PULL_DUR) {
               const t = elapsed / PULL_DUR;
               const e = t < 0.5 ? 2*t*t : 1-2*(1-t)*(1-t);
@@ -460,9 +466,9 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
               );
             } else if (elapsed < PULL_DUR + SNAP_DUR) {
               const t = (elapsed - PULL_DUR) / SNAP_DUR;
-              const e = 1 - (1-t)*(1-t);
-              bun.sprite.x = launchX + DX * (1-e);
-              bun.sprite.y = launchY + DY * (1-e);
+              const snapE = 1 - (1-t)*(1-t);
+              bun.sprite.x = launchX + DX * (1 - snapE);
+              bun.sprite.y = launchY + DY * (1 - snapE);
               traj.clear();
             } else {
               bun.sprite.x = launchX; bun.sprite.y = launchY;
@@ -483,16 +489,15 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
       app.stage.on('pointermove', (e: { global: { x: number; y: number } }) => {
         if (!dragBun || dragBun.sprite.destroyed) return;
         const { x, y } = e.global;
-        let pullX = x - dragOriginX;
-        let pullY = y - dragOriginY;
+        let pullX = x - dragOriginX, pullY = y - dragOriginY;
         const dist = Math.hypot(pullX, pullY);
         if (dist > MAX_PULL) { pullX = pullX / dist * MAX_PULL; pullY = pullY / dist * MAX_PULL; }
         dragBun.sprite.x = dragOriginX + pullX;
         dragBun.sprite.y = dragOriginY + pullY;
-
-        const vx = -pullX * LAUNCH_SCALE;
-        const vy = -pullY * LAUNCH_SCALE;
-        drawTrajectory(vx, vy, dragOriginX + pullX, Math.min(dragOriginY + pullY, groundY - 2));
+        drawTrajectory(
+          -pullX * LAUNCH_SCALE, -pullY * LAUNCH_SCALE,
+          dragOriginX + pullX, Math.min(dragOriginY + pullY, groundY - 2),
+        );
       });
 
       function releaseDrag() {
@@ -505,7 +510,6 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
         const pullY = bun.sprite.y - dragOriginY;
         bun.sprite.scale.set(BUN_SCALE);
 
-        // Too-small pull: snap back to launch pad, stay ready.
         if (Math.hypot(pullX, pullY) < 12) {
           bun.sprite.x = dragOriginX;
           bun.sprite.y = dragOriginY;
@@ -514,15 +518,24 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
           return;
         }
 
-        // Clamp to just above ground so the first-frame physics step can't
-        // immediately see the bun touching the ground.
-        bun.sprite.y = Math.min(bun.sprite.y, groundY - 2);
-
         const vx = -pullX * LAUNCH_SCALE;
         const vy = -pullY * LAUNCH_SCALE;
-        // Spawn body at sprite.y - BUN_VISUAL_YOFFSET so the first body-sync
-        // frame (sprite.y = body.y + BUN_VISUAL_YOFFSET) puts the sprite exactly here.
-        bun.body = makeBunBody(bun.sprite.x, bun.sprite.y - BUN_VISUAL_YOFFSET, vx, vy, 'playerBun');
+        const wy0 = Math.min(bun.sprite.y, groundY - 2);
+        const vz  = computeVz(vy, wy0);
+
+        if (vz === null) {
+          // SHORT: snap back
+          bun.sprite.x = dragOriginX;
+          bun.sprite.y = dragOriginY;
+          bun.phase = 'at_launch';
+          bun.sprite.cursor = 'grab';
+          return;
+        }
+
+        bun.vx = vx; bun.vy = vy; bun.vz = vz;
+        bun.wx0 = bun.sprite.x;  // includes lateral offset
+        bun.wy0 = wy0;
+        bun.flightStart = performance.now();
         bun.phase = 'in_flight';
         bun.slowFrames = 0;
         bun.sprite.cursor = 'default';
@@ -531,37 +544,32 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
       app.stage.on('pointerup', releaseDrag);
       app.stage.on('pointerupoutside', releaseDrag);
 
-      // ── Reply bun click: closest geometry, stage-level ───
-      // Use body.position (not sprite.y which includes BUN_VISUAL_YOFFSET) as the hit centre.
-      // Radius = bunRadius so two touching bodies (2*bunRadius apart) have non-overlapping circles.
-      const REPLY_CLICK_RADIUS = bunRadius;
+      // ── Reply bun click (stage-level) ─────────────────────
       app.stage.on('pointerdown', (e: { global: { x: number; y: number } }) => {
         if (dragBun) return;
         const { x, y } = e.global;
         let closest: Bun | null = null;
-        let closestDist = REPLY_CLICK_RADIUS;
+        let closestDist = Infinity;
         for (const bun of buns) {
           if (bun.phase !== 'on_ground' || bun.sprite.destroyed || !bun.isReply) continue;
-          const hitX = bun.body ? bun.body.position.x : bun.sprite.x;
-          const hitY = bun.body ? bun.body.position.y : bun.sprite.y - BUN_VISUAL_YOFFSET;
-          const dist = Math.hypot(x - hitX, y - hitY);
-          if (dist < closestDist) { closestDist = dist; closest = bun; }
+          const wz_b = bun.body ? bun.body.position.y : bun.toWZ;
+          const clickR = Math.max(bunRadius * (CAM_DIST / (wz_b + CAM_DIST)), 20);
+          const dist = Math.hypot(x - bun.sprite.x, y - bun.sprite.y);
+          if (dist < clickR && dist < closestDist) { closestDist = dist; closest = bun; }
         }
         if (closest) setPopupRef.current(closest.narration);
       });
 
-      // ── Main ticker: physics step → sprite sync → logic ──
+      // ── Main ticker ───────────────────────────────────────
       app.ticker.add(() => {
         const dt  = app.ticker.deltaMS;
         const now = performance.now();
 
-        // Cat chew wobble while LLM is thinking.
         if (catPhase === 'chewing') {
           chewMs += dt;
-          cat.scale.set(CAT_SCALE * (1 + Math.sin(chewMs / 140) * 0.05));
+          cat.scale.set(catVisualScale * (1 + Math.sin(chewMs / 140) * 0.05));
         }
 
-        // Fixed-step physics accumulator: run as many 16.67ms steps as dt allows.
         physAccum += dt;
         while (physAccum >= FIXED_STEP) {
           Engine.update(engine, FIXED_STEP, 1);
@@ -571,118 +579,117 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
         for (const bun of buns) {
           if (bun.sprite.destroyed) continue;
 
-          // ── Sync sprite from body (all live-body phases) ──
-          // +BUN_VISUAL_YOFFSET shifts sprite center to visual bottom at groundY.
-          if (bun.body && bun.phase !== 'dragging' && bun.phase !== 'flying_out') {
-            bun.sprite.x = bun.body.position.x;
-            bun.sprite.y = bun.body.position.y + BUN_VISUAL_YOFFSET;
-            bun.sprite.rotation = bun.body.angle;
+          // ── in_flight: pure analytic 3D ───────────────────
+          if (bun.phase === 'in_flight') {
+            const elapsed = now - bun.flightStart;
+            const wx = bun.wx0 + bun.vx * elapsed;
+            const wy = bun.wy0 + bun.vy * elapsed + 0.5 * GRAVITY * elapsed * elapsed;
+            const wz = bun.vz * elapsed;
+            const { sx, sy, scale } = project(wx, wy, wz);
+            bun.sprite.x = sx;
+            bun.sprite.y = sy;
+            bun.sprite.scale.set(BUN_SCALE * scale);
+
+            if (sx < -220 || sx > W + 220 || wy < -400) {
+              returnToLaunch(bun); continue;
+            }
+            if (checkHit3D(wx, wy, wz) && !catBusy) {
+              void triggerEat(bun); continue;
+            }
+            if (wy >= groundY) {
+              returnToLaunch(bun); continue;
+            }
           }
 
-          // ── in_flight: off-screen recovery + stable-stop → return ──
-          if (bun.phase === 'in_flight' && bun.body) {
-            const { x: px, y: py } = bun.body.position;
-
-            // Flew off canvas: start return arc immediately.
-            if (px < -220 || px > W + 220 || py < -400) {
-              returnToLaunch(bun);
-              continue;
-            }
-
-            // Stable-stop: count consecutive frames below speed threshold.
-            // Any speed spike (rolling, collision bump) resets the counter to
-            // prevent premature return while the bun is still moving.
-            if (bun.body.speed < SLOW_THRESHOLD) {
-              bun.slowFrames++;
-            } else {
-              bun.slowFrames = 0;
-            }
-
-            if (bun.slowFrames >= SLOW_FRAMES) returnToLaunch(bun);
-          }
-
-          // ── returning: arc tween back to the slingshot ────────────
-          // Entry point for M3.2 tail-sweep (M3.2.5): replace or precede this block.
+          // ── returning: Bezier arc back to slingshot ───────
           if (bun.phase === 'returning') {
             const t = Math.min((now - bun.retStartAt) / RETURN_DUR, 1);
-            // Ease-out cubic: fast launch, smooth settle into the slingshot.
             const e = 1 - Math.pow(1 - t, 3);
             const i = 1 - e;
             bun.sprite.x = i*i*bun.retFromX + 2*i*e*bun.retCtrlX + e*e*launchX;
             bun.sprite.y = i*i*bun.retFromY + 2*i*e*bun.retCtrlY + e*e*launchY;
-            // Spin damps toward 0 as bun settles into the pocket.
             bun.sprite.rotation *= (1 - t * 0.35);
-
+            // Scale from ~0.75 back to 1.0 as bun returns to z=0
+            bun.sprite.scale.set(BUN_SCALE * (0.75 + 0.25 * e));
             if (t >= 1) {
-              bun.sprite.x = launchX;
-              bun.sprite.y = launchY;
-              bun.sprite.rotation = 0;
-              bun.phase = 'at_launch';
-              bun.sprite.cursor = 'grab';
+              bun.sprite.x = launchX; bun.sprite.y = launchY;
+              bun.sprite.rotation = 0; bun.sprite.scale.set(BUN_SCALE);
+              bun.phase = 'at_launch'; bun.sprite.cursor = 'grab';
             }
           }
 
-          // ── flying_out: Bezier arc → spawn physics body at landing ──
+          // ── flying_out: reply bun Bezier arc ──────────────
           if (bun.phase === 'flying_out') {
             const t = Math.min((now - bun.startAt) / bun.dur, 1);
             const i = 1 - t;
             bun.sprite.x = i*i*bun.fromX + 2*i*t*bun.ctrlX + t*t*bun.toX;
-            // Ramp in BUN_VISUAL_YOFFSET so arc lands at same y the body-sync will use (no jump).
-            bun.sprite.y = i*i*bun.fromY + 2*i*t*bun.ctrlY + t*t*bun.toY + BUN_VISUAL_YOFFSET * t;
+            bun.sprite.y = i*i*bun.fromY + 2*i*t*bun.ctrlY + t*t*bun.toY;
+            // Interpolate Z for perspective scale: CAT_Z → toWZ
+            const wz_i = bun.fromWZ + (bun.toWZ - bun.fromWZ) * t;
+            bun.sprite.scale.set(BUN_SCALE * (CAM_DIST / (wz_i + CAM_DIST)));
 
             if (t >= 1) {
-              // Arc complete: create physics body at landing position.
-              // A tiny downward seed velocity lets matter.js start contact
-              // resolution immediately rather than from zero.
-              const body = Bodies.circle(bun.toX, bun.toY, bunRadius, {
-                restitution: 0.22,
-                friction: 0.85,
-                frictionAir: 0.02,
+              // Create XZ scatter body (body.x=worldX, body.y=worldZ)
+              const body = Bodies.circle(bun.toWX, bun.toWZ, bunRadius, {
+                restitution: 0.22, friction: 0.85, frictionAir: 0.02,
                 label: 'replyBun',
               });
-              Body.setVelocity(body, { x: 0, y: FIXED_STEP * 0.4 });
+              Body.setVelocity(body, { x: (Math.random() - 0.5) * 2, y: (Math.random() - 0.5) * 0.8 });
               Composite.add(engine.world, body);
               bun.body = body;
               bun.phase = 'on_ground';
-
               catPhase = 'idle';
               cat.texture = texIdle;
-              cat.scale.set(CAT_SCALE);
+              cat.scale.set(catVisualScale);
               catBusy = false;
               setBusyRef.current(false);
             }
           }
-        }
 
-        // ── Redraw ground shadows (after all positions updated) ──────────
-        // ellipse(cx, cy, halfW, halfH) — semi-transparent dark oval on groundY
-        shadowLayer.clear();
-        shadowLayer.ellipse(catX + catW * 0.5, groundY, catW * 0.22, 6).fill({ color: 0x3d1a00, alpha: 0.22 });
-        shadowLayer.ellipse(launchX, groundY, 15, 4).fill({ color: 0x3d1a00, alpha: 0.22 });
-        for (const bun of buns) {
-          if (bun.sprite.destroyed) continue;
-          if (bun.phase === 'on_ground') {
-            shadowLayer.ellipse(bun.sprite.x, groundY, bunRadius * 0.75, 4).fill({ color: 0x3d1a00, alpha: 0.22 });
+          // ── on_ground: XZ scatter body → sprite sync ──────
+          if (bun.phase === 'on_ground' && bun.body) {
+            const wx_b = bun.body.position.x;
+            const wz_b = bun.body.position.y;   // matter.js Y = world Z
+            // Project ground plane point, then offset so visual content-bottom (row 51)
+            // sits at shadow_sy; anchor(0.5) → offset = (51−50)×scale = 1×scale.
+            const { sx, sy: shadow_sy, scale } = project(wx_b, groundY, wz_b);
+            bun.sprite.x = sx;
+            bun.sprite.y = shadow_sy - 1 * BUN_SCALE * scale;
+            bun.sprite.scale.set(BUN_SCALE * scale);
+            bun.sprite.rotation = bun.body.angle;
           }
         }
 
-        // ── Latest-reply-bun outline (pixel-art border ring) ─────────────
-        // Follows the bun even as physics rolls/stacks it. Clears when next bun arrives.
+        // ── Depth-sort: near (small Z) buns render on top ─
+        const groundBuns = buns.filter(b => b.phase === 'on_ground' && !b.sprite.destroyed && b.body);
+        groundBuns.sort((a, b_) => b_!.body!.position.y - a!.body!.position.y);
+        groundBuns.forEach((b, i) => { b.sprite.zIndex = i; });
+
+        // ── Redraw shadows ─────────────────────────────────
+        shadowLayer.clear();
+        const catSc = CAM_DIST / (CAT_Z + CAM_DIST);  // 0.75
+        shadowLayer.ellipse(catWX, bgGroundY, catW * 0.22 * catSc, 6 * catSc).fill({ color: 0x3d1a00, alpha: 0.22 });
+        shadowLayer.ellipse(launchX, groundY, 15, 4).fill({ color: 0x3d1a00, alpha: 0.22 });
+        for (const bun of buns) {
+          if (bun.sprite.destroyed || bun.phase !== 'on_ground' || !bun.body) continue;
+          const wz_b = bun.body.position.y;
+          const { sx, sy, scale: sc } = project(bun.body.position.x, groundY, wz_b);
+          shadowLayer.ellipse(sx, sy, bunRadius * 0.75 * sc, 4 * sc).fill({ color: 0x3d1a00, alpha: 0.22 });
+        }
+
+        // ── Latest reply bun outline ───────────────────────
         outlineLayer.clear();
         if (latestReplyBunId !== null) {
           const lb = buns.find(b => b.id === latestReplyBunId && !b.sprite.destroyed);
           if (lb) {
-            const cx = lb.body ? lb.body.position.x : lb.sprite.x;
-            const cy = lb.body ? lb.body.position.y : (lb.sprite.y - BUN_VISUAL_YOFFSET);
-            // Dark shadow ring (1px outside the bright ring for pixel-art pop)
-            outlineLayer.circle(cx, cy, bunRadius + 5).stroke({ color: 0x1a0800, width: 2 });
-            // Bright warm-yellow ring
-            outlineLayer.circle(cx, cy, bunRadius + 4).stroke({ color: 0xFFE055, width: 3 });
+            const wz_lb = lb.body ? lb.body.position.y : lb.toWZ;
+            const _or = (bunRadius + 4) * (CAM_DIST / (wz_lb + CAM_DIST));
+            outlineLayer.circle(lb.sprite.x, lb.sprite.y, _or + 1).stroke({ color: 0x1a0800, width: 2 });
+            outlineLayer.circle(lb.sprite.x, lb.sprite.y, _or).stroke({ color: 0xFFE055, width: 3 });
           }
         }
       });
 
-      // Auto-spit opening narration as a reply bun.
       if (initialNarrationRef.current) {
         setTimeout(() => { if (!cancelled) spitBun(initialNarrationRef.current); }, 400);
       }
