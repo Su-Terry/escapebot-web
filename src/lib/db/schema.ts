@@ -23,6 +23,9 @@ export const worldStates = pgTable('world_states', {
   state: jsonb('state').notNull(),
   // Scenario tag (e.g. 'spaceship', 'alchemy_lab')
   scenarioTag: text('scenario_tag'),
+  // Clean initial WorldState snapshot written once at generate() time, never overwritten by turns.
+  // Used by createShare() to copy into the share record for replay support.
+  initialState: jsonb('initial_state'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 });
@@ -35,6 +38,9 @@ export const shares = pgTable('shares', {
   scenarioTitle: text('scenario_title').notNull().default(''),
   quote: text('quote').notNull(),
   turnCount: integer('turn_count').notNull(),
+  // Immutable clean initial WorldState snapshot copied from world_states at createShare() time.
+  // null on shares created before replay feature — replay button hidden for those.
+  initialState: jsonb('initial_state'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 

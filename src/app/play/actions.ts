@@ -3,7 +3,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { nanoid } from "nanoid";
 import { eq } from "drizzle-orm";
-import { generate, processTurn, loadState, resetState } from "@/lib/engine";
+import { generate, processTurn, loadState, loadInitialState, loadReplayFromShare, resetState } from "@/lib/engine";
 import { db, shares } from "@/lib/db";
 import type { WorldState } from "@/lib/engine/types";
 
@@ -111,12 +111,18 @@ export async function createShare(narrationIndex: number): Promise<{ shareId: st
   const quote = narrations[narrationIndex];
   const shareId = nanoid(10);
 
+  // Copy the initial state snapshot from world_states into the share record so
+  // that anyone opening the share link can replay the exact same scenario.
+  // null is acceptable (pre-feature games) — replay button will be hidden for those shares.
+  const initialState = await loadInitialState(userId);
+
   await db.insert(shares).values({
     shareId,
     clerkUserId: userId,
     scenarioTitle: state.scenarioTitle ?? "",
     quote,
     turnCount: state.turnCount,
+    initialState: initialState as unknown ?? null,
   });
 
   return { shareId };
@@ -132,4 +138,34 @@ export async function getShare(shareId: string) {
     .where(eq(shares.shareId, shareId))
     .limit(1);
   return rows[0] ?? null;
+}
+
+/**
+ * Load a share's initial state snapshot as B's active game.
+ * Returns { status: 'conflict' } if B has an in-progress game and force is not set.
+ * Returns { status: 'ok' } on success — caller is responsible for navigating to /play.
+ * Does NOT call redirect() because redirect() throws NEXT_REDIRECT which propagates
+ * to client try/catch blocks when invoked from a Client Component event handler.
+ * Throws if not authenticated, share not found, or snapshot is incompatible.
+ */
+export async function startReplay(
+  shareId: string,
+  force?: boolean,
+): Promise<{ status: "conflict" | "ok" }> {
+  const { userId: clerkUserId } = await auth();
+  if (!clerkUserId) throw new Error("Not authenticated");
+
+  const record = await getShare(shareId);
+  if (!record) throw new Error("Share not found");
+  if (!record.initialState) throw new Error("This share does not support replay");
+
+  if (!force) {
+    const current = await loadState(clerkUserId);
+    if (current && !current.isWon && current.turnCount > 0) {
+      return { status: "conflict" };
+    }
+  }
+
+  await loadReplayFromShare(clerkUserId, record.initialState);
+  return { status: "ok" };
 }

@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { auth } from "@clerk/nextjs/server";
 import { getShare } from "@/app/play/actions";
+import { ReplayCTA } from "./ReplayCTA";
 
 type Params = Promise<{ shareId: string }>;
 
@@ -41,7 +43,7 @@ export async function generateMetadata({
 
 export default async function SharePage({ params }: { params: Params }) {
   const { shareId } = await params;
-  const record = await getShare(shareId);
+  const [record, { userId }] = await Promise.all([getShare(shareId), auth()]);
   if (!record) notFound();
 
   const ogSrc = `/api/og?id=${encodeURIComponent(shareId)}`;
@@ -72,22 +74,30 @@ export default async function SharePage({ params }: { params: Params }) {
           {record.scenarioTitle} · {record.turnCount} turns
         </p>
       )}
-      <a
-        href="/play"
-        style={{
-          display: "inline-block",
-          marginTop: 20,
-          padding: "12px 28px",
-          background: "#111",
-          color: "#fff",
-          borderRadius: 8,
-          textDecoration: "none",
-          fontSize: 15,
-          fontWeight: 600,
-        }}
-      >
-        挑戰 EscapeBot →
-      </a>
+      <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap", marginTop: 20 }}>
+        <a
+          href="/play"
+          style={{
+            display: "inline-block",
+            padding: "12px 28px",
+            background: "#111",
+            color: "#fff",
+            borderRadius: 8,
+            textDecoration: "none",
+            fontSize: 15,
+            fontWeight: 600,
+          }}
+        >
+          挑戰 EscapeBot →
+        </a>
+        {record.initialState != null && (
+          <ReplayCTA
+            shareId={shareId}
+            scenarioTitle={record.scenarioTitle}
+            isAuthenticated={!!userId}
+          />
+        )}
+      </div>
     </div>
   );
 }

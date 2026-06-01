@@ -47,21 +47,36 @@ async function withDbRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
 /**
  * Upsert the active WorldState for a user.
  * One row per user: inserts on first save, updates on subsequent saves.
+ * Pass initialState only at new-game time (generate / replay load) — it is written once
+ * and must never be overwritten by turn updates, so omit it on every processTurn call.
  */
 export async function saveWorldState(
   userId: string,
   state: WorldState,
   scenarioTag?: string,
+  initialState?: WorldState,
 ): Promise<void> {
-  await withDbRetry("saveWorldState", () =>
-    db
-      .insert(worldStates)
-      .values({ userId, state: state as unknown, scenarioTag })
-      .onConflictDoUpdate({
-        target: worldStates.userId,
-        set: { state: state as unknown, scenarioTag, updatedAt: new Date() },
-      }),
-  );
+  if (initialState !== undefined) {
+    await withDbRetry("saveWorldState", () =>
+      db
+        .insert(worldStates)
+        .values({ userId, state: state as unknown, scenarioTag, initialState: initialState as unknown })
+        .onConflictDoUpdate({
+          target: worldStates.userId,
+          set: { state: state as unknown, scenarioTag, updatedAt: new Date(), initialState: initialState as unknown },
+        }),
+    );
+  } else {
+    await withDbRetry("saveWorldState", () =>
+      db
+        .insert(worldStates)
+        .values({ userId, state: state as unknown, scenarioTag })
+        .onConflictDoUpdate({
+          target: worldStates.userId,
+          set: { state: state as unknown, scenarioTag, updatedAt: new Date() },
+        }),
+    );
+  }
 }
 
 /**
@@ -82,6 +97,26 @@ export async function loadWorldState(userId: string): Promise<WorldState | null>
 
   try {
     return WorldStateSchema.parse(rows[0].state);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load the initial WorldState snapshot for a user (written once at generate time).
+ * Returns null if none exists, the row is corrupt, or this is a pre-replay-feature game.
+ */
+export async function loadWorldStateInitial(userId: string): Promise<WorldState | null> {
+  const rows = await withDbRetry("loadWorldStateInitial", () =>
+    db
+      .select({ initialState: worldStates.initialState })
+      .from(worldStates)
+      .where(eq(worldStates.userId, userId))
+      .limit(1),
+  );
+  if (rows.length === 0 || !rows[0].initialState) return null;
+  try {
+    return WorldStateSchema.parse(rows[0].initialState);
   } catch {
     return null;
   }

@@ -2,11 +2,13 @@ import { apply, applyFallback, enforceStateChange } from "./ruleEnforcer";
 import {
   getOrCreateUserByClerkId,
   loadWorldState,
+  loadWorldStateInitial,
   saveWorldState,
   deleteWorldState,
 } from "./sessionStore";
 import { generateScenario } from "./scenarioGenerator";
 import { handleTurn } from "./turnHandler";
+import { WorldStateSchema } from "./types";
 import type { WorldState } from "./types";
 import type { StateChange } from "./types";
 
@@ -50,6 +52,8 @@ async function resolveUuid(clerkUserId: string): Promise<string> {
 /**
  * Generate a new scenario and persist it as the user's active game.
  * clerkUserId: Clerk's user.id string (text). Internally mapped to users.id UUID for DB ops.
+ * The clean initial WorldState is stored alongside the active state so createShare() can
+ * copy it into the share record, enabling replay for anyone who opens the share link.
  */
 export async function generate(
   clerkUserId: string,
@@ -58,7 +62,8 @@ export async function generate(
   const uuid = await resolveUuid(clerkUserId);
   // clerkUserId used as sessionId (game-level identifier, not the DB FK)
   const state = await generateScenario(clerkUserId, opts);
-  await saveWorldState(uuid, state);
+  // Pass state as initialState: written once here, never overwritten by processTurn
+  await saveWorldState(uuid, state, undefined, state);
   return state;
 }
 
@@ -180,4 +185,31 @@ export async function loadState(clerkUserId: string): Promise<WorldState | null>
 export async function resetState(clerkUserId: string): Promise<void> {
   const uuid = await resolveUuid(clerkUserId);
   return deleteWorldState(uuid);
+}
+
+/**
+ * Load the initial WorldState snapshot for a user (written at generate() time).
+ * Returns null for users who started their game before the replay feature was added,
+ * or if no active game exists.
+ */
+export async function loadInitialState(clerkUserId: string): Promise<WorldState | null> {
+  const uuid = await resolveUuid(clerkUserId);
+  return loadWorldStateInitial(uuid);
+}
+
+/**
+ * Load a replay scenario from a raw share snapshot and save it as B's active game.
+ * Patches sessionId to bClerkUserId so the turn LLM addresses B correctly.
+ * Also writes the snapshot as B's initialState so B can share their own completion.
+ * Throws ZodError if the snapshot JSON is incompatible with the current WorldState schema.
+ */
+export async function loadReplayFromShare(
+  bClerkUserId: string,
+  snapshotJson: unknown,
+): Promise<WorldState> {
+  const parsedState = WorldStateSchema.parse(snapshotJson);
+  const uuid = await resolveUuid(bClerkUserId);
+  const replayState: WorldState = { ...parsedState, sessionId: bClerkUserId };
+  await saveWorldState(uuid, replayState, undefined, replayState);
+  return replayState;
 }

@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { UserButton } from '@clerk/nextjs';
-import { startGame, submitAction, resetGame, createShare } from './actions';
+import { startGame, submitAction, resetGame, createShare, getCurrentState } from './actions';
 import BunCatScene, { type ActionResult } from './BunCatScene';
 
 export default function PlayPage() {
@@ -23,6 +23,46 @@ export default function PlayPage() {
   const [shareId, setShareId] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // On mount: if navigated here from a replay (startReplay sets ?replay=1),
+  // load the already-saved world_states instead of waiting for the user to
+  // click "開始新場景" (which would generate a fresh game and overwrite the snapshot).
+  useEffect(() => {
+    const search = window.location.search;
+    const params = new URLSearchParams(search);
+    const replayParam = params.get('replay');
+    console.log('[play/useEffect] mount, search=', search, 'replay param=', replayParam);
+    if (replayParam !== '1') {
+      console.log('[play/useEffect] no replay param, exiting');
+      return;
+    }
+    console.log('[play/useEffect] replay=1 detected, calling replaceState then getCurrentState');
+    // Strip the param immediately so back-navigation doesn't re-trigger
+    window.history.replaceState(null, '', '/play');
+    console.log('[play/useEffect] after replaceState, href=', window.location.href);
+    setStarted(true);
+    setGenerating(true);
+    getCurrentState()
+      .then(view => {
+        console.log('[play/useEffect] getCurrentState returned:', view ? `turnCount=${view.turnCount} scenarioTitle=${view.scenarioTitle}` : 'null');
+        if (!view) { setStarted(false); return; }
+        setHistory(view.history);
+        setScenarioTitle(view.scenarioTitle);
+        setInitialNarration(view.narration);
+        setSceneItems(view.sceneItems);
+        setExits(view.exits);
+        setInventory(view.inventory);
+        setIsWon(view.isWon);
+        console.log('[play/useEffect] state populated, started=true');
+      })
+      .catch((err) => {
+        console.error('[play/useEffect] getCurrentState error:', err);
+        setStarted(false);
+        setGenError('載入重玩場景失敗，請重試。');
+      })
+      .finally(() => setGenerating(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleStart() {
     setGenerating(true);
