@@ -104,21 +104,44 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
   const onWinRef = useRef(onWin);
   useEffect(() => { onWinRef.current = onWin; }, [onWin]);
   const setBusyRef = useRef(setBusy);
+
+  // Bind PlayPage wrapper width to the visual viewport via CSS --vvw variable so the
+  // entire layout fits within the visible area on iOS (keyboard / system UI).
+  // overflow-x: hidden prevents residual scroll if layout and vvW are briefly out of sync.
+  useEffect(() => {
+    if (window.innerWidth >= 640) return; // mobile only
+    document.body.style.overflowX = 'hidden';
+    const setVvw = () => {
+      const w = window.visualViewport?.width ?? window.innerWidth;
+      document.documentElement.style.setProperty('--vvw', `${w}px`);
+      document.documentElement.style.setProperty('--vvml', '0px');
+    };
+    setVvw(); // set immediately on mount
+    window.visualViewport?.addEventListener('resize', setVvw);
+    return () => {
+      document.body.style.overflowX = '';
+      document.documentElement.style.removeProperty('--vvw');
+      document.documentElement.style.removeProperty('--vvml');
+      window.visualViewport?.removeEventListener('resize', setVvw);
+    };
+  }, []);
+
   const setPopupRef = useRef(setPopup);
   const initialNarrationRef = useRef(initialNarration ?? '');
 
   useEffect(() => {
     let cancelled = false;
     let destroyFn: (() => void) | null = null;
+    let initGen = 0;   // incremented each time we (re)start initPixi
     const el = mountRef.current;
     if (!el) return;
 
-    async function initPixi(el: HTMLDivElement, W: number, H: number) {
+    async function initPixi(el: HTMLDivElement, W: number, H: number, gen: number) {
       const [PIXI, Matter] = await Promise.all([
         import('pixi.js'),
         import('matter-js'),
       ]);
-      if (cancelled) return;
+      if (cancelled || gen !== initGen) return;
 
       const { Engine, Bodies, Body, Composite, World, Constraint } = Matter;
 
@@ -874,22 +897,44 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
       }
     }
 
-    let observing = true;
+    // The PlayPage wrapper is bounded by CSS --vvw (set by the useEffect above), so the
+    // container's contentRect.width already reflects the visual viewport. ResizeObserver
+    // fires automatically when --vvw changes and causes a layout reflow. Pixi reinit is
+    // debounced 100 ms so rapid CSS animation frames (keyboard opening) trigger one reinit,
+    // not many.
+    let lastW = 0;
+    let lastH = 550;
+    let reinitTimer: ReturnType<typeof setTimeout> | null = null;
+    const pending = { w: 0, h: 550 };
+
+    const maybeReinit = (W: number, H: number) => {
+      if (Math.abs(W - lastW) <= 2 && Math.abs(H - lastH) <= 2) return;
+      lastW = W; lastH = H;
+      const myGen = ++initGen;
+      destroyFn?.(); destroyFn = null;
+      initPixi(el, W, H, myGen);
+    };
+
     const ro = new ResizeObserver((entries) => {
-      if (!observing || cancelled) return;
+      if (cancelled) return;
       const { width, height } = entries[0].contentRect;
-      if (width > 0 && height > 0) {
-        observing = false;
-        ro.disconnect();
-        initPixi(el, width, height);
-      }
+      if (width <= 0 || height <= 0) return;
+      pending.w = Math.round(width);
+      pending.h = height;
+      if (reinitTimer) clearTimeout(reinitTimer);
+      reinitTimer = setTimeout(() => {
+        reinitTimer = null;
+        if (cancelled) return;
+        maybeReinit(pending.w, pending.h);
+      }, 100);
     });
     ro.observe(el);
 
     return () => {
       cancelled = true;
       spawnRef.current = null;
-      if (observing) { observing = false; ro.disconnect(); }
+      ro.disconnect();
+      if (reinitTimer) clearTimeout(reinitTimer);
       destroyFn?.();
     };
   }, []);
@@ -902,39 +947,80 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
     spawnRef.current?.(action);
   }
 
+  // Narrow-viewport detection for popup layout (client-only component, window always available).
+  const isMobileView = window.innerWidth < 640;
+
   return (
     <div style={{ position: 'relative', paddingBottom: 80 }}>
       {popup && (
-        <div
-          onClick={() => setPopup(null)}
-          style={{
-            position: 'fixed', inset: 0,
-            background: 'rgba(0,0,0,0.45)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            zIndex: 200, padding: 24,
-          }}
-        >
+        isMobileView ? (
+          // Mobile: bottom sheet. Dismissed automatically when input is focused
+          // (onFocus handler on the input) so keyboard-vs-sheet conflicts are avoided.
           <div
-            onClick={e => e.stopPropagation()}
+            onClick={() => setPopup(null)}
             style={{
-              background: '#fff', borderRadius: 12, padding: '24px 28px',
-              maxWidth: 520, width: '100%', lineHeight: 1.75,
-              fontSize: 15, whiteSpace: 'pre-wrap', color: '#111',
+              position: 'fixed', bottom: 0, left: 0, right: 0,
+              background: 'rgba(0,0,0,0.45)',
+              zIndex: 200,
             }}
           >
-            {popup}
-            <button
-              onClick={() => setPopup(null)}
+            <div
+              onClick={e => e.stopPropagation()}
               style={{
-                display: 'block', marginTop: 20, padding: '6px 18px',
-                fontSize: 13, borderRadius: 6,
-                border: '1px solid #ccc', background: '#fff', cursor: 'pointer',
+                background: '#fff', borderRadius: '12px 12px 0 0',
+                padding: '20px 20px 32px',
+                maxHeight: '45vh', overflowY: 'auto',
+                lineHeight: 1.75, fontSize: 15,
+                whiteSpace: 'pre-wrap', color: '#111',
+                maxWidth: 'var(--vvw, 100%)',
               }}
             >
-              收起
-            </button>
+              {popup}
+              <button
+                onClick={() => setPopup(null)}
+                style={{
+                  display: 'block', marginTop: 16, padding: '6px 18px',
+                  fontSize: 13, borderRadius: 6,
+                  border: '1px solid #ccc', background: '#fff', cursor: 'pointer',
+                }}
+              >
+                收起
+              </button>
+            </div>
           </div>
-        </div>
+        ) : (
+          // Desktop: centered modal (unchanged)
+          <div
+            onClick={() => setPopup(null)}
+            style={{
+              position: 'fixed', inset: 0,
+              background: 'rgba(0,0,0,0.45)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              zIndex: 200, padding: 24,
+            }}
+          >
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{
+                background: '#fff', borderRadius: 12, padding: '24px 28px',
+                maxWidth: 520, width: '100%', lineHeight: 1.75,
+                fontSize: 15, whiteSpace: 'pre-wrap', color: '#111',
+              }}
+            >
+              {popup}
+              <button
+                onClick={() => setPopup(null)}
+                style={{
+                  display: 'block', marginTop: 20, padding: '6px 18px',
+                  fontSize: 13, borderRadius: 6,
+                  border: '1px solid #ccc', background: '#fff', cursor: 'pointer',
+                }}
+              >
+                收起
+              </button>
+            </div>
+          </div>
+        )
       )}
 
       {/* Canvas + mode toggle overlay */}
@@ -997,7 +1083,9 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
           position: 'fixed', bottom: 0, left: 0, right: 0,
           background: '#fff', borderTop: '1px solid #eee',
           padding: '8px 12px 10px',
-          maxWidth: 900, margin: '0 auto',
+          maxWidth: 'min(900px, var(--vvw, 900px))',
+          marginLeft: 'var(--vvml, auto)',
+          marginRight: 'var(--vvml, auto)',
         }}
       >
         {text === '' && !busy && suggestions.length > 0 && (
@@ -1028,6 +1116,7 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
             value={text}
             onChange={e => setText(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) submit(); }}
+            onFocus={() => { if (window.innerWidth < 640) setPopup(null); }}
             placeholder={busy ? '貓在嚼…' : '打字捏包子，然後拖曳瞄準丟（移動 / 解謎 / 查看）'}
             disabled={busy}
             autoFocus

@@ -42,9 +42,7 @@ export function ReplayCTA({ shareId, scenarioTitle, isAuthenticated }: Props) {
   async function handleClick(force?: boolean) {
     setLoading(true);
     try {
-      console.log('[ReplayCTA] calling startReplay, force=', force);
       const result = await startReplay(shareId, force);
-      console.log('[ReplayCTA] startReplay returned:', result);
       if (result.status === "conflict") {
         setLoading(false);
         const ok = window.confirm(
@@ -55,14 +53,8 @@ export function ReplayCTA({ shareId, scenarioTitle, isAuthenticated }: Props) {
         }
         return;
       }
-      // status === 'ok': game saved — navigate with ?replay=1 so /play loads
-      // the saved state instead of generating a new game
-      const targetUrl = "/play?replay=1";
-      console.log('[ReplayCTA] pushing to', targetUrl);
-      router.push(targetUrl);
-      console.log('[ReplayCTA] push called, window.location.href =', window.location.href);
-    } catch (err) {
-      console.error('[ReplayCTA] error:', err);
+      router.push("/play?replay=1");
+    } catch {
       setLoading(false);
       window.alert("重玩失敗，請稍後再試。");
     }
