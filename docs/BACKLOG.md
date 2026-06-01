@@ -1,16 +1,12 @@
 # EscapeBot Backlog
 
-## Current state (2026-05-27)
+## 本檔職責 / 整體進度
 
-- Phase 1: ✅ Shipped (Discord bot, production stable, ~5 real players)
-- Phase 1.5: ✅ Hotfixes shipped (F1, F2, F11, F15, F-hint verified by 2 real players in production)
-- Phase 2 deep dive 1: ✅ Engine port to TypeScript + Vercel deploy
-- Phase 2 deep dive 2:
-  - Milestone 1: ✅ Clerk Discord OAuth + Server Actions + 純文字 web 通關 (本地 + production)
-  - Milestone 2: ✅ Tap UI (場景物件/出口/背包 button + 文字框常駐) + 完整通關驗證
-  - Milestone 3: 🔄 Next — PixiJS + 貓 (LLM avatar) + 物件動畫
-  - Milestone 4: ⬜ 通關分享卡 (@vercel/og) + Open Graph — 解 F-share
-- Collaborator: 已邀請一位 frontend co-designer 加入 (equal-status, 負責 Phase 2 視覺/前端)。走 B 路徑邀請 (拿能順暢通關的 working prototype 邀, 非 spec)。
+> **整體進度（Phase / Milestone 哪些已 ship、下一個做什麼）以「EscapeBot-設計文件」為單一真相源**（該檔的「📊 專案狀態 / Gate」+ 第六部分「目前進度」）。本檔**不再複述 milestone 進度**——以前在這裡維護一份, 必然跟設計文件漂移（曾停在「M3 是 Next」整整落後兩個 milestone）。
+>
+> 本檔只管 BACKLOG 本職:engine/generator 的 findings 與 bug（已解 / 待辦）、累積的方法論 insight、chain mode、cost、deploy 教訓。要看「現在做到哪、下一個做什麼」請看設計文件。
+
+- **Collaborator**: 已邀請一位 frontend co-designer 加入 (equal-status, 負責 Phase 2 視覺/前端)。走 B 路徑邀請 (拿能順暢通關的 working prototype 邀, 非 spec)。
 
 ---
 
@@ -101,10 +97,9 @@ Player H 主動拉新玩家進 server.
 
 ### Engineering plan
 
-- Deep dive 2 (Milestone 1+2): ✅ standalone web foundation + tap UI shipped
-- Deep dive 2 (Milestone 3+4): PixiJS + 貓 + 物件動畫, 然後 share card (解 F-share)
-- Deep dive 3: chain mode schema + first chain product
-- Deep dive 4: chain mode UI + endgame design
+> web 基礎建設與 M1–M4a（web foundation、餵貓循環、分享卡等）的進度見設計文件,不在此複述。chain mode 本身的規劃:
+- chain mode schema + first chain product
+- chain mode UI + endgame design
 
 ### Strategic value
 
@@ -178,11 +173,11 @@ Player H 主動拉新玩家進 server.
 
 **優先級**: next up, 但**非 T0 阻斷** — 遊戲照玩、能通關、能驗證, 只是探索被提前揭露。提到最前是不讓它無限期靠軟把關撐著。做好後 prefill 查看 chip 改為依 visible 過濾 (現在 chip 暫留, 標已知缺陷)。
 
-### F-share (CRITICAL, Milestone 4 未做): 通關後沒可分享 artifact
+### F-share (核心已解 — M4a 已上線): 通關後沒可分享 artifact
 
-Player A v2 38 turn 通關 ✅ 但沒主動截圖分享。Observer Y: 「需要視覺體驗」。
-現在 tap UI 通關只有「🎉 你通關了」文字, 沒分享卡。
-**需要 (Milestone 4)**: 結局分享卡 PNG (@vercel/og) + F11 weird moments archive + Open Graph meta。
+Player A v2 38 turn 通關 ✅ 但沒主動截圖分享。Observer Y: 「需要視覺體驗」。當時 tap UI 通關只有「🎉 你通關了」文字, 沒分享卡。
+**已解 (M4a)**: LLM 生成中文金句卡 + server 防偽 + 短碼 `/s/{shareId}` + Open Graph 預覽, 已上線 (見設計文件第六部分)。
+**剩餘 / 後續**: F11 weird moments archive (卡片內容增量) 尚未做, 屬 M4b「卡片內容增量」+ C 版分享卡方向 (見 M4b-spec、分享卡C版)。
 
 ### F2y (待辦): puzzle clue 隱藏在 location object 內
 
