@@ -164,6 +164,20 @@ Player H 主動拉新玩家進 server.
 
 ## Findings — 待辦
 
+### F-visibility (NEXT UP, 最高優先, engine 架構級): 沒有 visibility 模型 / 物件全可見
+
+**現象**: engine 沒有「物件被發現了沒」的概念。Item schema 只有 id/name/description/locationId/isTakeable/isLocked/unlockItemId — 沒有 visible/hidden/discovered。物件結構完全平的 (generator prompt 明文「no sub-containers, items sit directly in location's itemIds」), 「便條在桌上」只能讓便條和桌子並列在同一 location 的 itemIds → 進房第一秒兩者同等可見、同等可 take。「查看桌子才發現便條」這層探索**從來不存在** — 「查看」在 engine 層不是動作, 只是丟給 LLM 生 narration, 不改 state、不 promote 任何物件。
+
+**怎麼被揪出**: prefill 查看 chip 從 sceneItems 生成, 把「查看便條」白紙黑字攤在玩家眼前、無法繞過。narration 的軟把關 (turnHandler prompt「never reveal undiscovered items」) 還可能含糊, chip 是明確列表 → 必穿。**prefill 當照妖鏡, 同 M2 tap UI 揭穿隱形 engine bug 的機制。**
+
+**同族 (root cause 重要)**: 跟 F-web-鎖門穿透 (鎖純靠 LLM 軟把關、沒 state 欄位 → tap 明確指令一逼就穿)、F-web-孤兒item 同一個教訓 — **LLM 軟性把關擋不住明確 UI / state 缺欄位**。對應方法論 insight: 「LLM 輸出不被信任為最終 state, 該補程式層 / state 結構」。
+
+**要做**: Item 加 hidden / revealedByAction 之類欄位; 「查看」變成會 promote 物件成 visible 的真動作; toView() 與 LLM context 都依 visibility 篩 (只送已發現的)。generator 要能生成「便條歸屬於桌子、查看桌子才現」的結構。
+
+**不只是修 bug**: 這是「逐步發現 / 探索層次」這個遊戲性的基礎 — 目前所有東西開局全攤開, 根本沒有探索。屬遊戲設計決定 (作者已拍板: 要這層)。架構級, 動手前先說明方向 (schema + 查看動作流程 + visibility 篩選) 再寫。
+
+**優先級**: next up, 但**非 T0 阻斷** — 遊戲照玩、能通關、能驗證, 只是探索被提前揭露。提到最前是不讓它無限期靠軟把關撐著。做好後 prefill 查看 chip 改為依 visible 過濾 (現在 chip 暫留, 標已知缺陷)。
+
 ### F-share (CRITICAL, Milestone 4 未做): 通關後沒可分享 artifact
 
 Player A v2 38 turn 通關 ✅ 但沒主動截圖分享。Observer Y: 「需要視覺體驗」。
