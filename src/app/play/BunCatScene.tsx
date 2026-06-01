@@ -12,6 +12,9 @@ export type ActionResult = {
 const MIN_CHEW_MS = 500;
 const minDelay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
+/** Minimum perspective scale for on-ground buns — prevents shrinking to a dot at far depth. Tune to taste. */
+const MIN_BUN_SCALE = 0.55;
+
 /** Max suggestions shown per category (scene items / exits / inventory). Easy to tune. */
 const MAX_CHIPS_PER_CATEGORY = 3;
 
@@ -74,6 +77,13 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [popup, setPopup] = useState<string | null>(null);
+  const [gloveMode, setGloveMode] = useState(false);
+  const gloveModeRef = useRef(false);
+
+  function toggleGloveMode(val: boolean) {
+    gloveModeRef.current = val;
+    setGloveMode(val);
+  }
 
   const suggestions = useMemo(() => {
     const chips: string[] = [];
@@ -110,7 +120,7 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
       ]);
       if (cancelled) return;
 
-      const { Engine, Bodies, Body, Composite, World } = Matter;
+      const { Engine, Bodies, Body, Composite, World, Constraint } = Matter;
 
       // ── PixiJS app ────────────────────────────────────────
       PIXI.TextureSource.defaultOptions.scaleMode = 'nearest';
@@ -198,6 +208,33 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
         };
       }
 
+      // ── Bun visual scale with MIN_BUN_SCALE floor ────────
+      // Use for sprite.scale, hit radius, outline — NOT for raw geometry (shadows, project()).
+      function clampedBunScale(wz: number): number {
+        return Math.max(CAM_DIST / (wz + CAM_DIST), MIN_BUN_SCALE);
+      }
+
+      // ── Pointer → ground-plane XZ (exact inverse of project at wy=groundY) ─
+      // Subtracts the grab offset recorded at drag start so we invert from the
+      // shadow screen position, not from the raw pointer (which sits above the shadow
+      // by BUN_SCALE*scale + visual-center offset → would produce wrong wz without offset).
+      // Algebraic inverse: shadow_sy = CAM_Y + (groundY-CAM_Y)*scale
+      //   → scale = (shadow_sy - CAM_Y)/(groundY - CAM_Y)
+      //   → wz   = CAM_DIST/scale - CAM_DIST
+      //   → wx   = CAM_X + (shadow_sx - CAM_X)/scale
+      // At drag start offset=pointer-shadow → adj=pointer-offset=shadow → wz=wz0, wx=wx0 ✓
+      function pointerToGroundXZ(px: number, py: number): { wx: number; wz: number } {
+        const shadowSx = px - gloveOffsetX;
+        const shadowSy = py - gloveOffsetY;
+        // Only clamp for true out-of-bounds (pointer dragged above horizon); no clamp needed in normal range.
+        // Clamp shadowSy so scale > 0 (pointer above horizon) and wz ≥ 0 (pointer below ground).
+        const clampedSy = Math.min(Math.max(shadowSy, CAM_Y + 1), groundY);
+        const scale = (clampedSy - CAM_Y) / (groundY - CAM_Y);
+        const wz = Math.min(Math.max(CAM_DIST / scale - CAM_DIST, 0), 280);
+        const wx = Math.min(Math.max(CAM_X + (shadowSx - CAM_X) / scale, 0), W);
+        return { wx, wz };
+      }
+
       // ── 3D Hit Detection ──────────────────────────────────
       function checkHit3D(wx: number, wy: number, wz: number): boolean {
         const dx = wx - catWX, dy = wy - catWY, dz = wz - CAT_Z;
@@ -234,6 +271,16 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
       let firstBunDemo = true;
       let physAccum = 0;
       let latestReplyBunId: number | null = null;
+
+      // ── Glove drag state ──────────────────────────────────
+      let gloveDragBun: Bun | null = null;
+      let gloveAnchorBody: MB | null = null;
+      let gloveConstraint: MatterNS.Constraint | null = null;
+      // Offset from pointer to bun's shadow screen position at drag start.
+      // Shadow = project(wx, groundY, wz).{sx,sy} — NOT sprite.y (which has −BUN_SCALE*scale).
+      // Stored so pointermove can invert to exact XZ without pointer-to-sprite offset error.
+      let gloveOffsetX = 0;
+      let gloveOffsetY = 0;
 
       // ── PIXI layers ───────────────────────────────────────
       const bgLayer: PixiGraphics = new PIXI.Graphics();
@@ -417,12 +464,12 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
         sprite.on('pointerover', () => {
           if (bun.phase !== 'on_ground') return;
           const wz_b = bun.body ? bun.body.position.y : bun.toWZ;
-          bun.sprite.scale.set(BUN_SCALE * (CAM_DIST / (wz_b + CAM_DIST)) * 1.28);
+          bun.sprite.scale.set(clampedBunScale(wz_b) * 1.28);
         });
         sprite.on('pointerout', () => {
           if (bun.phase !== 'on_ground') return;
           const wz_b = bun.body ? bun.body.position.y : bun.toWZ;
-          bun.sprite.scale.set(BUN_SCALE * (CAM_DIST / (wz_b + CAM_DIST)));
+          bun.sprite.scale.set(clampedBunScale(wz_b));
         });
 
         catPhase = 'spitting';
@@ -467,6 +514,8 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
           if (bun.phase === 'at_launch') bun.sprite.scale.set(BUN_SCALE);
         });
         sprite.on('pointerdown', () => {
+          // Glove mode: player bun is not draggable
+          if (gloveModeRef.current) return;
           if (bun.phase !== 'at_launch') return;
           bun.phase = 'dragging';
           dragBun = bun;
@@ -514,13 +563,96 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
 
       spawnRef.current = spawnBun;
 
+      // ── Pick the visually top-most reply bun under (x, y) ─
+      // Uses hit-circle test, then selects the highest zIndex (= smallest worldZ = nearest viewer).
+      // Shared by pointer-mode click and glove-mode grab — both get the visual top bun.
+      // Single bun case: only one candidate → same result as "closest"; no regression.
+      function pickBunAt(x: number, y: number): Bun | null {
+        let topBun: Bun | null = null;
+        let topZIndex = -1;
+        for (const bun of buns) {
+          if (bun.phase !== 'on_ground' || bun.sprite.destroyed || !bun.isReply) continue;
+          const wz_b = bun.body ? bun.body.position.y : bun.toWZ;
+          const sc = clampedBunScale(wz_b);
+          const clickR = Math.max(bunRadius * sc, 20);
+          // on_ground buns have pivot=(-3, bunHitCY): sprite.x/y IS already the visual center.
+          const vcx = bun.sprite.x;
+          const vcy = bun.sprite.y;
+          if (Math.hypot(x - vcx, y - vcy) < clickR) {
+            if (bun.sprite.zIndex > topZIndex) {
+              topZIndex = bun.sprite.zIndex;
+              topBun = bun;
+            }
+          }
+        }
+        return topBun;
+      }
+
+      // ── Glove drag: start, move anchor, release ───────────
+      function startGloveDrag(x: number, y: number) {
+        const bun = pickBunAt(x, y);
+        if (!bun || !bun.body) return;
+
+        // Compute bun's shadow screen position from body XZ via forward projection.
+        // Shadow = project(wx, groundY, wz) — does NOT subtract the sprite.y visual offset.
+        const wx0 = bun.body.position.x;
+        const wz0 = bun.body.position.y;
+        const scale0 = CAM_DIST / (wz0 + CAM_DIST);
+        const shadowSx0 = CAM_X + (wx0 - CAM_X) * scale0;
+        const shadowSy0 = CAM_Y + (groundY - CAM_Y) * scale0;
+        // Record offset so pointerToGroundXZ inverts from shadow, not raw pointer.
+        gloveOffsetX = x - shadowSx0;
+        gloveOffsetY = y - shadowSy0;
+
+        gloveDragBun = bun;
+        // Place anchor at bun's exact XZ — zero spring tension at grab start, no jump.
+        gloveAnchorBody = Bodies.circle(wx0, wz0, 5, {
+          isStatic: true,
+          collisionFilter: { mask: 0 },  // anchor never collides with anything
+          label: 'gloveAnchor',
+        });
+
+        Body.set(bun.body, 'frictionAir', 0.12);  // damp spring oscillation during drag
+
+        gloveConstraint = Constraint.create({
+          bodyA: gloveAnchorBody,
+          bodyB: bun.body,
+          stiffness: 0.2,
+          damping: 0.3,
+          length: 0,
+        });
+
+        Composite.add(engine.world, [gloveAnchorBody, gloveConstraint]);
+        bun.sprite.cursor = 'grabbing';
+      }
+
+      function releaseGloveDrag() {
+        if (!gloveDragBun) return;
+        if (gloveDragBun.body) {
+          Body.set(gloveDragBun.body, 'frictionAir', 0.02);
+        }
+        gloveDragBun.sprite.cursor = 'pointer';
+        gloveDragBun = null;
+        if (gloveConstraint) { Composite.remove(engine.world, gloveConstraint); gloveConstraint = null; }
+        if (gloveAnchorBody) { Composite.remove(engine.world, gloveAnchorBody); gloveAnchorBody = null; }
+      }
+
       // ── Stage pointer events ──────────────────────────────
       app.stage.eventMode = 'static';
       app.stage.hitArea = new PIXI.Rectangle(0, 0, W, H);
 
       app.stage.on('pointermove', (e: { global: { x: number; y: number } }) => {
-        if (!dragBun || dragBun.sprite.destroyed) return;
         const { x, y } = e.global;
+
+        // Glove drag: update anchor position
+        if (gloveDragBun && gloveAnchorBody) {
+          const { wx, wz } = pointerToGroundXZ(x, y);
+          Body.setPosition(gloveAnchorBody, { x: wx, y: wz });
+          return;
+        }
+
+        // Slingshot drag (pointer mode)
+        if (!dragBun || dragBun.sprite.destroyed) return;
         let pullX = x - dragOriginX, pullY = y - dragOriginY;
         const dist = Math.hypot(pullX, pullY);
         if (dist > MAX_PULL) { pullX = pullX / dist * MAX_PULL; pullY = pullY / dist * MAX_PULL; }
@@ -533,6 +665,9 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
       });
 
       function releaseDrag() {
+        // Release glove drag if active (glove and slingshot are mutually exclusive modes)
+        releaseGloveDrag();
+
         if (!dragBun || dragBun.sprite.destroyed) { dragBun = null; traj.clear(); return; }
         const bun = dragBun;
         dragBun = null;
@@ -576,24 +711,22 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
       app.stage.on('pointerup', releaseDrag);
       app.stage.on('pointerupoutside', releaseDrag);
 
-      // ── Reply bun click (stage-level) ─────────────────────
+      // ── Stage pointerdown: branch on mode ─────────────────
       app.stage.on('pointerdown', (e: { global: { x: number; y: number } }) => {
-        if (dragBun) return;
         const { x, y } = e.global;
-        let closest: Bun | null = null;
-        let closestDist = Infinity;
-        for (const bun of buns) {
-          if (bun.phase !== 'on_ground' || bun.sprite.destroyed || !bun.isReply) continue;
-          const wz_b = bun.body ? bun.body.position.y : bun.toWZ;
-          const sc = BUN_SCALE * (CAM_DIST / (wz_b + CAM_DIST));
-          const clickR = Math.max(bunRadius * sc, 20);
-          // Align to visual content center (same offset as sprite.hitArea: local (-3, bunHitCY))
-          const vcx = bun.sprite.x + (-3) * sc;
-          const vcy = bun.sprite.y + bunHitCY * sc;
-          const dist = Math.hypot(x - vcx, y - vcy);
-          if (dist < clickR && dist < closestDist) { closestDist = dist; closest = bun; }
+
+        if (gloveModeRef.current) {
+          // Glove mode: grab the visually top reply bun under pointer
+          startGloveDrag(x, y);
+          return;
         }
-        if (closest) setPopupRef.current(closest.narration);
+
+        // Pointer mode: tap reply bun to read narration
+        // dragBun is set by the player-bun sprite's own pointerdown (which fires first);
+        // if it's set we're doing a slingshot pull, not a tap.
+        if (dragBun) return;
+        const picked = pickBunAt(x, y);
+        if (picked) setPopupRef.current(picked.narration);
       });
 
       // ── Main ticker ───────────────────────────────────────
@@ -662,7 +795,7 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
             bun.sprite.y = i*i*bun.fromY + 2*i*t*bun.ctrlY + t*t*bun.toY;
             // Interpolate Z for perspective scale: CAT_Z → toWZ
             const wz_i = bun.fromWZ + (bun.toWZ - bun.fromWZ) * t;
-            bun.sprite.scale.set(BUN_SCALE * (CAM_DIST / (wz_i + CAM_DIST)));
+            bun.sprite.scale.set(clampedBunScale(wz_i));
 
             if (t >= 1) {
               // Create XZ scatter body (body.x=worldX, body.y=worldZ)
@@ -673,6 +806,10 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
               Body.setVelocity(body, { x: (Math.random() - 0.5) * 2, y: (Math.random() - 0.5) * 0.8 });
               Composite.add(engine.world, body);
               bun.body = body;
+              // Shift rotation pivot to visual circle center so the bun spins around its
+              // visual center, not the sprite anchor (texture row 50 vs visual row 34.5).
+              // sprite.x/y now places this pivot in world space; on_ground sync below compensates.
+              bun.sprite.pivot.set(-3, bunHitCY);
               bun.phase = 'on_ground';
               catPhase = 'idle';
               cat.texture = texIdle;
@@ -686,12 +823,13 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
           if (bun.phase === 'on_ground' && bun.body) {
             const wx_b = bun.body.position.x;
             const wz_b = bun.body.position.y;   // matter.js Y = world Z
-            // Project ground plane point, then offset so visual content-bottom (row 51)
-            // sits at shadow_sy; anchor(0.5) → offset = (51−50)×scale = 1×scale.
-            const { sx, sy: shadow_sy, scale } = project(wx_b, groundY, wz_b);
-            bun.sprite.x = sx;
-            bun.sprite.y = shadow_sy - 1 * BUN_SCALE * scale;
-            bun.sprite.scale.set(BUN_SCALE * scale);
+            const { sx, sy: shadow_sy } = project(wx_b, groundY, wz_b);
+            const vsc = clampedBunScale(wz_b);
+            // pivot=(-3, bunHitCY): sprite.x/y places the visual center (rotation pivot).
+            // vsc may exceed raw perspective scale at far depth (MIN_BUN_SCALE floor).
+            bun.sprite.x = sx + (-3) * vsc;
+            bun.sprite.y = shadow_sy - 1 * BUN_SCALE * vsc + bunHitCY * vsc;
+            bun.sprite.scale.set(vsc);
             bun.sprite.rotation = bun.body.angle;
           }
         }
@@ -719,10 +857,12 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
           const lb = buns.find(b => b.id === latestReplyBunId && !b.sprite.destroyed);
           if (lb) {
             const wz_lb = lb.body ? lb.body.position.y : lb.toWZ;
-            const sc_lb = BUN_SCALE * (CAM_DIST / (wz_lb + CAM_DIST));
+            const sc_lb = clampedBunScale(wz_lb);
             const _or = (bunRadius + 4) * sc_lb;
-            const vcx_lb = lb.sprite.x + (-3) * sc_lb;
-            const vcy_lb = lb.sprite.y + bunHitCY * sc_lb;
+            // on_ground (lb.body !== null): pivot set → sprite.x/y = visual center directly.
+            // flying_out (lb.body === null): no pivot yet → apply offset to sprite.x/y.
+            const vcx_lb = lb.body ? lb.sprite.x : lb.sprite.x + (-3) * sc_lb;
+            const vcy_lb = lb.body ? lb.sprite.y : lb.sprite.y + bunHitCY * sc_lb;
             outlineLayer.circle(vcx_lb, vcy_lb, _or + 1).stroke({ color: 0x1a0800, width: 2 });
             outlineLayer.circle(vcx_lb, vcy_lb, _or).stroke({ color: 0xFFE055, width: 3 });
           }
@@ -758,6 +898,7 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
     const action = text.trim();
     if (!action || busy) return;
     setText('');
+    toggleGloveMode(false);  // always return to pointer mode so slingshot works
     spawnRef.current?.(action);
   }
 
@@ -796,17 +937,59 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
         </div>
       )}
 
-      <div
-        ref={mountRef}
-        style={{
-          width: '100%', height: 550,
-          borderRadius: 12, background: '#f5ede0',
-          overflow: 'hidden',
-        }}
-      />
+      {/* Canvas + mode toggle overlay */}
+      <div style={{ position: 'relative' }}>
+        <div
+          ref={mountRef}
+          style={{
+            width: '100%', height: 550,
+            borderRadius: 12, background: '#f5ede0',
+            overflow: 'hidden',
+          }}
+        />
+
+        {/* Mode switch: pointer vs glove — top-right corner */}
+        <div
+          style={{
+            position: 'absolute', top: 8, right: 8,
+            display: 'flex', gap: 4, zIndex: 10,
+          }}
+        >
+          <button
+            onClick={() => toggleGloveMode(false)}
+            title="指標模式：點包子讀回覆"
+            style={{
+              width: 36, height: 36, borderRadius: 8,
+              border: `2px solid ${!gloveMode ? '#b07030' : '#ddd'}`,
+              background: !gloveMode ? '#fff3e0' : '#f5f5f5',
+              cursor: 'pointer', fontSize: 18, lineHeight: '32px',
+              boxShadow: !gloveMode ? '0 1px 4px rgba(0,0,0,0.18)' : 'none',
+              transition: 'all 0.15s',
+            }}
+          >
+            👆
+          </button>
+          <button
+            onClick={() => toggleGloveMode(true)}
+            title="手套模式：拖動落地包子"
+            style={{
+              width: 36, height: 36, borderRadius: 8,
+              border: `2px solid ${gloveMode ? '#b07030' : '#ddd'}`,
+              background: gloveMode ? '#fff3e0' : '#f5f5f5',
+              cursor: 'pointer', fontSize: 18, lineHeight: '32px',
+              boxShadow: gloveMode ? '0 1px 4px rgba(0,0,0,0.18)' : 'none',
+              transition: 'all 0.15s',
+            }}
+          >
+            🧤
+          </button>
+        </div>
+      </div>
 
       <div style={{ fontSize: 11, color: '#bbb', marginTop: 5, textAlign: 'center' }}>
-        把包子往後拉放開丟給貓 · 落地後點包子讀回覆 · 丟歪的包子會自動飛回
+        {gloveMode
+          ? '手套模式：拖動落地包子撥來撥去 · 切回 👆 讀回覆'
+          : '把包子往後拉放開丟給貓 · 落地後點包子讀回覆 · 丟歪的包子會自動飛回'}
       </div>
 
       <div
