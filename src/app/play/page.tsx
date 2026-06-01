@@ -8,6 +8,7 @@ import BunCatScene, { type ActionResult } from './BunCatScene';
 export default function PlayPage() {
   const [started, setStarted] = useState(false);
   const [generating, setGenerating] = useState(false); // true while startGame is running
+  const [genError, setGenError] = useState<string | null>(null);
   const [isWon, setIsWon] = useState(false);
   const [initialNarration, setInitialNarration] = useState('');
   // Win-screen state (kept in sync by handleAction)
@@ -22,6 +23,7 @@ export default function PlayPage() {
   async function handleStart() {
     setGenerating(true);
     setStarted(true);
+    setGenError(null);
     setIsWon(false);
     setHistory([]);
     setScenarioTitle('');
@@ -36,7 +38,7 @@ export default function PlayPage() {
       setScenarioTitle(view.scenarioTitle);
       setInitialNarration(view.narration);
     } catch (e) {
-      alert('生成場景失敗：' + (e as Error).message);
+      setGenError((e as Error).message || '未知錯誤');
       setStarted(false);
     }
     setGenerating(false);
@@ -90,13 +92,28 @@ export default function PlayPage() {
       </div>
 
       {/* ── Start screen ─────────────────────────────────── */}
-      {!started && (
+      {!started && !genError && (
         <button
           onClick={handleStart}
           style={{ ...btn, padding: '12px 20px', fontSize: 16, marginTop: 8 }}
         >
           開始新場景
         </button>
+      )}
+
+      {/* ── Generation failed — retry ─────────────────────── */}
+      {genError && (
+        <div style={{ marginTop: 32 }}>
+          <div style={{ color: '#c00', fontSize: 14, marginBottom: 12 }}>
+            生成場景暫時失敗，稍等片刻再試一下。
+          </div>
+          <button
+            onClick={handleStart}
+            style={{ ...btn, padding: '12px 20px', fontSize: 16 }}
+          >
+            重試
+          </button>
+        </div>
       )}
 
       {/* ── Scenario generating ───────────────────────────── */}
