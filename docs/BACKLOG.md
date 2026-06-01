@@ -1,0 +1,334 @@
+# EscapeBot Backlog
+
+## Current state (2026-05-27)
+
+- Phase 1: ✅ Shipped (Discord bot, production stable, ~5 real players)
+- Phase 1.5: ✅ Hotfixes shipped (F1, F2, F11, F15, F-hint verified by 2 real players in production)
+- Phase 2 deep dive 1: ✅ Engine port to TypeScript + Vercel deploy
+- Phase 2 deep dive 2:
+  - Milestone 1: ✅ Clerk Discord OAuth + Server Actions + 純文字 web 通關 (本地 + production)
+  - Milestone 2: ✅ Tap UI (場景物件/出口/背包 button + 文字框常駐) + 完整通關驗證
+  - Milestone 3: 🔄 Next — PixiJS + 貓 (LLM avatar) + 物件動畫
+  - Milestone 4: ⬜ 通關分享卡 (@vercel/og) + Open Graph — 解 F-share
+- Collaborator: 已邀請一位 frontend co-designer 加入 (equal-status, 負責 Phase 2 視覺/前端)。走 B 路徑邀請 (拿能順暢通關的 working prototype 邀, 非 spec)。
+
+---
+
+## 核心 insight (累積的方法論)
+
+### 1. Tap UI 是照妖鏡 (2026-05-27, 方法論層級)
+
+純文字 Discord 版的 narration 會蓋住所有「LLM 嘴上演的事 vs state 真實發生的事」的落差。
+玩家只看文字, 文字說拿到了就以為拿到了, 沒有 UI 揭穿。
+
+Tap UI 把 state 攤在 button 上 (背包有沒有那個 item / 出口鎖沒鎖), 每個落差立刻現形。
+
+**重要推論**: Milestone 2 修的 bug 大多不是 web 新 bug, 是 Discord 版一直存在但隱形的 engine/generator 缺陷。
+- 兩版共用同一套 engine model (locations/items/puzzles), 這些修復**對 Discord 版也適用**。
+- Discord 版那 ~5 個 user 很可能玩在一個有隱形瑕疵的版本 (偶爾拿不到東西 / 穿過假鎖, 被純文字蓋住, 玩家沒抱怨可能只是剛好沒卡到通關必須的物件)。
+- → TODO: 查 Discord player log 有沒有 take_item / move_player reject 記錄, 驗證隱形瑕疵規模。
+
+### 2. validateScenarioLogic + repairItemConsistency = 可解性保證層 (可能是技術壁壘)
+
+「LLM 生成關卡, 但保證可玩」這件事, 沒有自動機制保證時, LLM 會生出死鎖 / 孤兒 reward / 無解 puzzle / 內部不一致。
+這輪意外長出兩個東西構成第一道防線:
+- `validateScenarioLogic()`: 生成時偵測無法自動修補的真死鎖 → retry 重生
+- `repairItemConsistency()`: 生成時自動修補可修復的不一致 (item 雙向登記) → 不重生
+
+哲學: **LLM 生成的結構不被信任為最終 state**, 先過一層程式檢查 —
+- 能自動修補的 → 程式補
+- 不能修補的真死鎖 → retry
+- 設計上盡量把問題歸到「可自動修補」類, 減少昂貴的整場景重生
+
+這是「LLM 當 amplifier、state machine 當基石」哲學的具體落地, 且**可能是這類遊戲的核心技術壁壘**。
+
+### 3. LLM 生成需要內部一致性的結構化資料時, 總會漏某些約束
+
+不管 prompt 怎麼教 (即使 gemini-2.5-pro), LLM 系統性地會漏雙向登記、放錯 puzzle 位置、漏填 union optional 欄位。
+結論: 不該奢望 prompt 教會, 要靠程式事後修補 / 驗證, 不信任 LLM 輸出為最終 state。
+
+---
+
+## Organic referral evidence (important signal)
+
+### 2026-05-13
+
+Player H 主動拉新玩家進 server.
+
+**Significance**: 第一個 organic referral (非 creator 主動邀)
+- Phase 1 product 達「值得分享」minimum threshold
+- Discord-only model 已 demonstrate referral 能力
+
+**Stacking signals from Player H 同日**:
+- Chain mode positive ("不錯")
+- 主動 ask continuation ("通關後還有下一個嗎")
+- 主動拉朋友 referral
+
+**Caution**: Sample size 1, 不是 pattern. 需要 3-5 個 independent referrals 才能 declare organic traction.
+
+**Action items**:
+- 觀察新玩家 behavior (不主動 onboard, 看自然 friction)
+- Phase 2 ship 後可能重新評估「何時開始 organic distribution」(PTT / Reddit / HN)
+
+---
+
+## Validated direction: Chain mode (CONFIRMED — multi-player evidence)
+
+### Evidence
+
+**Player H (casual segment, phase 1 production)**:
+- 通關後**主動問** "通關後還有下一個嗎?"
+- Chain mode idea 反應「不錯」
+- 不擔心 creator 假設的 "會太長" concern
+- 解讀: 玩家自然 baseline 期望 product 有 continuation
+
+**Player A (tinkerer, phase 1 production)**:
+- v2 38 turn 通關但沒主動分享
+- 通關 = 結束 = retention 自然斷
+- Chain mode 該創造「想繼續玩到 chapter N」motivation
+
+**Observer Y**:
+- 「需要 GUI / 視覺體驗」
+- 玩家通關當下期望 engagement upgrade
+
+### Design (proposed)
+
+- Room 1 通關 → 結局頁面「進入下一章」button (player-controlled)
+- Room 2 scenario gen 接受 room 1 summary as context
+- Inventory carry: hybrid (universal items carry, room-specific reset)
+- Finite chain: 5-7 chambers per chain product
+- 第一個 chain product: TBD (Spaceship Trilogy / Alchemist Tower / 偵探推理)
+
+### Engineering plan
+
+- Deep dive 2 (Milestone 1+2): ✅ standalone web foundation + tap UI shipped
+- Deep dive 2 (Milestone 3+4): PixiJS + 貓 + 物件動畫, 然後 share card (解 F-share)
+- Deep dive 3: chain mode schema + first chain product
+- Deep dive 4: chain mode UI + endgame design
+
+### Strategic value
+
+- Niche deepening: LLM + escape room + finite chain = no direct competitor
+- "值得分享" leverage: "我玩到第 N 章了" status signal
+- Natural retention without violating success metric
+- AI Dungeon 有 endless mode 但無 genre, EscapeBot 提供 structured chain
+
+### Open questions
+
+- Inventory carry hybrid 的具體 rules
+- 不同 chain products 之間切換 (mid-chain abort 怎麼處理?)
+- Endgame 設計: 每 chain 最後 chamber 該怎麼 narrate "saga ends" without anticlimax?
+
+---
+
+## Findings — 已解決 (shipped)
+
+### Phase 1.5 (Discord production, verified by 2 real players)
+
+- **F1**: 解謎成功 narration 模糊 → 明確說「解開了」+ 物理變化 + 因果。✅
+- **F2**: 動作不通只回「沒反應」→ in-character 說明 + location guidance。✅
+- **F11**: 詭異動作 (吃鑰匙/跟椅子說話) plain refusal → in-character 詭異接受, state 不變。✅
+- **F15**: solution 格式 parsing + 反問確認流程 (Discord 版)。✅ (註: TS port 退化, 見 F-web-f15退化)
+- **F-hint**: 玩家問線索被當 injection 拒絕 → in-character hint, 不 spoil。✅
+
+### Phase 2 Milestone 1 + 2 (web, 2026-05-27)
+
+每條標注 **[engine 共通]** (Discord 版也有, 修復可搬回) / **[generator 品質]** / **[web 特有]**。
+
+- **F-web-langkey** [web 特有]: SDK 讀 `GOOGLE_GENERATIVE_AI_API_KEY` 但 env 設成 `GEMINI_API_KEY` → 所有 LLM call 失敗 → 英文 fallback。修: 本地 .env.local + Vercel 都改正確變數名。✅
+
+- **F-web-f15退化** [engine 共通]: F15 反問流程 port 到 TS 後「是」那 turn 撈不回原答案 (attemptedSolution undefined) + prompt 內部矛盾 (snake/camel 混用 + "ONLY explicit verb" vs "fill anyway")。修: 拿掉反問, 玩家給具體答案直接解 (同時改善 F-input)。✅
+
+- **F-web-allornothing** [engine 共通]: processTurn 全批驗證, 一個違規整批 reject + 3x retry → latency 30-47s, narration 丟成「Nothing happens」。修: partial apply — 逐個 enforceStateChange, 合法 apply / 非法 skip, narration 永遠保留, 移除 retry → latency 3-6s。✅
+
+- **F-web-flash-optional** [engine 共通]: gemini-2.5-flash 對 union type 的 optional 欄位 (attemptedSolution) 生成不可靠, 常漏填 → solve_puzzle 永遠 reject → 任何 string-match puzzle 解不開。修: backfillSolution (漏填時用玩家 raw action 補) + normalizeSolution (去空白/標點/底線)。✅
+
+- **F-web-假結局** [engine 共通]: LLM 在沒贏時 narration 演「逃脫畫上句點」, checkWin 還沒過 → 玩家以為結束卻還能玩 → 又掙扎十幾 turn (最糟 Turn 37 演結局, Turn 51 才真通關)。修: turnHandler 加 Ending Restraint — narration 不宣告結束, 勝利由引擎判定。✅
+
+- **F-web-鎖門穿透** [engine 共通, 重要]: Location 沒有「鎖」的 state 欄位, 鎖純靠 LLM 軟性把關 (puzzle 沒解就不 emit move_player)。Discord 純文字玩家被 LLM 唬住; web tap 的明確 button 指令「前往X」誘導 LLM emit move_player, rule enforcer 沒鎖檢查就放行 → 穿過。(高中 hardcoded 版有真鎖 room_order/door_lock_status, LLM 重構成 models.py 版時丟了)。
+  修 (五層補齊): types.ts Location 加 `lockedByPuzzleIds`; ruleEnforcer move_player 檢查未解的 lockedByPuzzleIds → hardcoded reject; toView 算 exit isLocked; page.tsx 鎖住出口顯示 🔒 disable; scenarioGenerator prompt 教生成 lockedByPuzzleIds; turnHandler prompt 教 LLM 別 emit 到鎖住房間。✅ (真鎖進 main line, 向後相容: 舊存檔 default [])
+
+- **F-web-解鎖死鎖** [generator 品質]: generator 把開門 puzzle 放進它鎖住的房間 → 要解謎才能進但 puzzle 在房裡 → 死鎖。rule enforcer 要求 puzzle.locationId === currentLocationId 所以 solve 靜默 reject, 但 LLM 照演開門。修: validateScenarioLogic() 生成時偵測 → retry。✅
+
+- **F-web-孤兒item** [engine 共通, root cause 重要]: item.locationId 跟 location.itemIds **兩處記錄, generator 只更新一個**。toView + take_item 驗證讀 loc.itemIds → 看不到/拿不到; 但 LLM 看完整 ws.items → narrate 拿到了 → state change 靜默 drop。(這是之前 security-keycard「LLM 一直想拿但一直 reject」的同一 bug; 對應 research sketch「Item.location_id 多處 sync」)。
+  修 (統一權威來源): take_item 驗證 + toView 都改讀 `item.locationId` (不信 loc.itemIds) + validateScenarioLogic 加雙向檢查。✅
+
+- **F-web-生成太久** [generator 品質]: LLM (即使 pro) 系統性常漏 item 雙向登記 → validateScenarioLogic 每次 retry 重生 (9000+ token pro call) → 生成 3 分鐘+。洞察: 對「可自動修補的小瑕疵」用「整場景重生」是錯手段。修: 分兩類 — 可自動修補 (雙向登記不同步) → repairItemConsistency() 程式直接補 loc.itemIds 不 retry; 真死鎖 → 才 retry。✅ (生成回到 36-66s, attempt=1)
+
+### 部分解決
+
+- **F-input + F2x** [Milestone 2 解]: 純文字 input friction → tap UI (場景物件/出口/背包 button) 解掉。80% turn 不用打字。F11 詭異動作 + 解謎答案仍用文字框 (常駐底部)。✅ 核心已解。
+- **F1b** [部分解]: reject narration 模糊「nothing happens」→ partial apply 後 narration 永遠保留 (不再全丟成 nothing happens) + reject log 加具體原因。但「玩家側」的明確 reject 訊息 (密碼錯 vs 系統 bug 區分) 仍可再強化。🔄 部分。
+
+---
+
+## Findings — 待辦
+
+### F-share (CRITICAL, Milestone 4 未做): 通關後沒可分享 artifact
+
+Player A v2 38 turn 通關 ✅ 但沒主動截圖分享。Observer Y: 「需要視覺體驗」。
+現在 tap UI 通關只有「🎉 你通關了」文字, 沒分享卡。
+**需要 (Milestone 4)**: 結局分享卡 PNG (@vercel/og) + F11 weird moments archive + Open Graph meta。
+
+### F2y (待辦): puzzle clue 隱藏在 location object 內
+
+Player H: 「看看四周的時候講多一點, 不管有用沒用都要講」。
+puzzle clue 嵌在 location object, 「看四周」narration 不含, 玩家要主動「看 X」。
+修: Tier 1 prompt (看四周 narration 含所有 visible features 含門/牆/地板暗示); Tier 2 schema (Location 加 notable_features)。
+
+### F-spoil (待辦): bot 過度 helpful, narrate solution 太直接
+
+Player H: 「直接說要這樣輸入了, 應該說要幫他們排序」。
+puzzle.description 混了 visible clue + solution 推理過程。
+修: Scenario Generator prompt — description 只描述 visible 線索, solution 由玩家推, 線索可分散到多個 item。
+
+### F-orphan (root cause 已知, 防線待補): orphan reward items
+
+Player: 「識別卡要幹嘛凹凹凹凹」。生了 reward item 但沒 puzzle 用到 → 玩家拿了發現沒用。
+**註**: 「拿都拿不到」的底層 bug 已由 F-web-孤兒item 修掉 (雙重記錄)。剩「拿得到但沒用途」這層。
+修: validateScenarioLogic 加「reward item 必須有 puzzle 用到」檢查 (見下方基礎設施 TODO); puzzle hint 暗示需要哪個 item; (Tier 3) inventory item tap 顯示「為什麼撿的」。
+
+### F5 (待辦): drop item action type
+
+Engine 已 port, web UI 可加 button + Rule Enforcer 加 drop_item type。
+
+### F-web-combo (engine 限制, 之後修): solution 只支援單一 StringMatch
+
+puzzle.solution 是單一字串靠 normalizeSolution 比對。做不到 A+B 組合 / 多步驟 / item combo / state pattern。
+對應 research sketch 的 Solution discriminated union (StringMatch / StatePattern / StateChangeSequence / ItemCombo)。
+玩家撞到時用單一答案 workaround。
+
+---
+
+## 關鍵基礎設施 TODO: validateScenarioLogic 持續擴充
+
+目前 validateScenarioLogic 擋: (1) puzzle 鎖在自己鎖住的房間 (2) item 雙向登記不同步 (後者改為 repairItemConsistency 自動修補)。
+
+該持續加的可解性 / 一致性檢查:
+- **reward item 孤兒** (生了 reward 但沒 puzzle 用到 — 解 F-orphan)
+- **win condition 不可達** (target location 永遠到不了 / required puzzle 無解)
+- **puzzle 線索缺失** (puzzle 答案的線索沒生在任何 item description / location feature 裡)
+- **連通性** (所有房間從起點透過解謎路徑可達, 無孤島房間)
+
+repairItemConsistency 的 console.warn 會持續報「LLM 每場漏幾個雙向登記」— 累積這數字當 generator 行為觀察, 判斷哪些約束 LLM 系統性失敗。
+
+---
+
+## Backlog (Phase 2 post-Milestone 4)
+
+### F9: Puzzle variety
+- 多場後玩家看穿 fetch quest pattern 重複
+- Fix: Scenario Generator prompt 強制每場 ≥2 種 puzzle types
+- Types: fetch quest / code derivation / sequence / combination / observation / logic
+
+### F11 Tier 2: Item hidden personality
+- 玩家對物品說話/查看 → 偶爾觸發 personality (需 schema Item.secret_personality)
+
+### F11 Tier 3: stagnant_streak tracker
+- 連續 N turn 無進展 → trigger Type C/D narration
+
+### F13: Weird moment count metric
+- TurnResult 加 is_weird_moment; Win embed 加「✨ 詭異瞬間: N 次」
+
+### F16: Multi-hop movement
+- Tier 1: Turn Handler narrate 中間經過, state 一次 1 hop
+- Tier 2: Rule Enforcer 支援 multi-hop chain
+
+---
+
+## Backlog (Phase 3)
+
+### F-theme: Theme presets
+- 治癒系 / 克蘇魯系 / 賽博龐克 / 蒸汽龐克 / 童話 / 末日
+- Scenario Generator system prompt 加 theme prefix; 玩家選 theme 影響整個生成
+- 跟 chain mode 結合: 整個 chain 同 theme
+
+### F3: 環境線索持久化
+- 玩家筆記本 / 線索列表; 早期看到的線索後續可查
+- 配合 F-orphan (inventory item tap 顯示 context)
+
+### F4: 救援機制 explicit design
+- 「鎖頭其實鬆動」這類 fallback hint 是 feature 還是 bug
+
+### F7: 風味動作 support
+- 穿衣服 / 對物品唱歌 等非 puzzle 動作允許 narration-only
+
+### F8: Rule Enforcer 兩層 design
+- Layer 1 嚴格 (影響 puzzle/win) / Layer 2 寬鬆 (純風味)
+
+### F14: Non-linear puzzle chain
+- Puzzle 間 interconnected; 需要更強 LLM planning
+
+---
+
+## Out of scope
+
+- Multi-player co-op
+- Mobile native app
+- 純 NPC 對話模擬
+- 純 narrative / visual novel
+- 醫療 / 法律專業模擬
+- 多 LLM provider fallback
+- Personalized AI (記住玩家偏好)
+- Retention reward (streak / badge) — 違反「值得分享」success metric
+
+---
+
+## Cost monitoring
+
+### Phase 1 production (Discord bot)
+
+Viral player baseline (3 sessions, 262 turns): NT$141.99 (~$4.6 USD)
+- Per-turn: ~$0.018
+- 一般玩家 50-80 turns: ~$1-1.5
+- 5 朋友混合: ~$15/月
+
+Safety net: Google AI Studio $30/月 hard cap
+
+### Phase 2 web (觀察中)
+
+- Scenario 生成: gemini-2.5-pro, 36-66s/場, ~5000-9600 output token
+- partial apply 移除 3x retry 後, turn latency 3-6s (原 30-47s), 同時降 turn cost (單次 flash call)
+
+---
+
+## Deploy lessons learned
+
+### Phase 1 (Discord bot, fly.io)
+
+- `.dockerignore` 必須有 `.venv/` (本地 venv 蓋掉 Linux builder venv)
+- Fly machine stuck after deploy: `flyctl machine start <id>`
+- `.env` 加 `.dockerignore`, production 用 fly secrets
+- Player session data `User/users/` 加 `.gitignore`
+- Dockerfile CMD 用絕對路徑 `/app/.venv/bin/python`
+
+### Phase 2 (Next.js, Vercel, Drizzle)
+
+#### Race condition on save world state
+- SELECT-then-INSERT-or-UPDATE 有 TOCTOU race
+- 解法: PostgreSQL UNIQUE constraint + ON CONFLICT DO UPDATE
+
+#### Vercel AI SDK + Gemini nested dict schema collapse
+- z.record(string, X) 在 SDK convert 時 collapse 成 {type: object}, Gemini 生 empty dict
+- 解法: output: 'no-schema', 用 Zod refine 玩家端 validate
+
+#### System prompt camelCase 一致性
+- Phase 1 Python snake_case → port 到 TS camelCase, system prompt 的 JSON schema 描述也要 sync
+- 否則 LLM 生 snake_case → Zod parse fail (見 F-web-f15退化, 同類根源)
+
+#### Vercel sensitive env vars
+- Dashboard add 的 Sensitive vars 拉不到 .env.local; 解法: vercel env add CLI (預設 non-sensitive)
+
+#### Gemini SDK 認的環境變數名
+- @ai-sdk/google 讀 `GOOGLE_GENERATIVE_AI_API_KEY`, 不是 `GEMINI_API_KEY` (見 F-web-langkey)
+- 本地 .env.local + Vercel 都要設對, 否則靜默走 fallback
+
+#### dump/debug script 的 env 載入順序坑
+- ES module import hoisting: 頂部 import engine 會先觸發 db 連線初始化, 早於 dotenv config 執行
+- DATABASE_URL 在 .env.local 帶引號會被 postgres 當 URL 一部分 → Invalid URL
+- 教訓: debug script 別跟 dev server 搶 env; 直接讓專案的 Claude Code 自己跑自己查, 比隔空寫 dump script 快 (這類工具問題易陷入 yak shaving)
+
+#### LLM 生成關卡的一致性不可信任
+- 即使 gemini-2.5-pro, 系統性會漏雙向登記 / 放錯 puzzle 位置 / 漏填 union optional 欄位
+- 解法: 生成後過 repairItemConsistency (自動修補) + validateScenarioLogic (真死鎖才 retry)
+- 原則: LLM 輸出不是最終 state, 要程式驗證/修補層
