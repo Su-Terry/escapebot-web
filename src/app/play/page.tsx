@@ -14,6 +14,10 @@ export default function PlayPage() {
   // Win-screen state (kept in sync by handleAction)
   const [history, setHistory] = useState<{ action: string; narration: string }[]>([]);
   const [scenarioTitle, setScenarioTitle] = useState('');
+  // Chip suggestion data (updated after each turn)
+  const [sceneItems, setSceneItems] = useState<{ id: string; name: string; isTakeable: boolean }[]>([]);
+  const [exits, setExits] = useState<{ id: string; name: string; isLocked: boolean }[]>([]);
+  const [inventory, setInventory] = useState<{ id: string; name: string }[]>([]);
   // Share-card state
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [shareId, setShareId] = useState<string | null>(null);
@@ -32,11 +36,17 @@ export default function PlayPage() {
     setShareId(null);
     setSharing(false);
     setCopied(false);
+    setSceneItems([]);
+    setExits([]);
+    setInventory([]);
     try {
       const view = await startGame();
       setHistory(view.history);
       setScenarioTitle(view.scenarioTitle);
       setInitialNarration(view.narration);
+      setSceneItems(view.sceneItems);
+      setExits(view.exits);
+      setInventory(view.inventory);
     } catch (e) {
       setGenError((e as Error).message || '未知錯誤');
       setStarted(false);
@@ -48,9 +58,12 @@ export default function PlayPage() {
   async function handleAction(action: string): Promise<ActionResult> {
     try {
       const view = await submitAction(action);
-      // Keep history / title in sync for the win screen
+      // Keep history / title / chip data in sync
       setHistory(view.history);
       setScenarioTitle(view.scenarioTitle);
+      setSceneItems(view.sceneItems);
+      setExits(view.exits);
+      setInventory(view.inventory);
       return { narration: view.narration, isWon: view.isWon };
     } catch (e) {
       return { narration: '（處理失敗：' + (e as Error).message + '）', isWon: false };
@@ -73,6 +86,9 @@ export default function PlayPage() {
     setShareId(null);
     setSharing(false);
     setCopied(false);
+    setSceneItems([]);
+    setExits([]);
+    setInventory([]);
   }
 
   const btn: React.CSSProperties = {
@@ -130,6 +146,9 @@ export default function PlayPage() {
             onAction={handleAction}
             onWin={handleWin}
             initialNarration={initialNarration}
+            sceneItems={sceneItems}
+            exits={exits}
+            inventory={inventory}
           />
           <button
             onClick={handleReset}

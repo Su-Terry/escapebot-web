@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Application, Sprite, Graphics as PixiGraphics } from 'pixi.js';
 import type * as MatterNS from 'matter-js';
 
@@ -12,10 +12,20 @@ export type ActionResult = {
 const MIN_CHEW_MS = 500;
 const minDelay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
+/** Max suggestions shown per category (scene items / exits / inventory). Easy to tune. */
+const MAX_CHIPS_PER_CATEGORY = 3;
+
+type SceneItem = { id: string; name: string; isTakeable: boolean };
+type Exit = { id: string; name: string; isLocked: boolean };
+type InventoryItem = { id: string; name: string };
+
 type Props = {
   onAction: (action: string) => Promise<ActionResult>;
   onWin: () => void;
   initialNarration?: string;
+  sceneItems?: SceneItem[];
+  exits?: Exit[];
+  inventory?: InventoryItem[];
 };
 
 type BunPhase =
@@ -57,12 +67,27 @@ interface Bun {
   pendingResult: Promise<ActionResult> | null;
 }
 
-export default function BunCatScene({ onAction, onWin, initialNarration }: Props) {
+export default function BunCatScene({ onAction, onWin, initialNarration, sceneItems, exits, inventory }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const spawnRef = useRef<((action: string) => void) | null>(null);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [popup, setPopup] = useState<string | null>(null);
+
+  const suggestions = useMemo(() => {
+    const chips: string[] = [];
+    (sceneItems ?? []).slice(0, MAX_CHIPS_PER_CATEGORY).forEach(item => {
+      chips.push(`查看${item.name}`);
+    });
+    (exits ?? []).slice(0, MAX_CHIPS_PER_CATEGORY).forEach(exit => {
+      chips.push(`前往${exit.name}`);
+    });
+    (inventory ?? []).slice(0, MAX_CHIPS_PER_CATEGORY).forEach(inv => {
+      chips.push(`使用${inv.name}`);
+    });
+    return chips;
+  }, [sceneItems, exits, inventory]);
 
   const onActionRef = useRef(onAction);
   useEffect(() => { onActionRef.current = onAction; }, [onAction]);
@@ -560,8 +585,12 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
         for (const bun of buns) {
           if (bun.phase !== 'on_ground' || bun.sprite.destroyed || !bun.isReply) continue;
           const wz_b = bun.body ? bun.body.position.y : bun.toWZ;
-          const clickR = Math.max(bunRadius * (CAM_DIST / (wz_b + CAM_DIST)), 20);
-          const dist = Math.hypot(x - bun.sprite.x, y - bun.sprite.y);
+          const sc = BUN_SCALE * (CAM_DIST / (wz_b + CAM_DIST));
+          const clickR = Math.max(bunRadius * sc, 20);
+          // Align to visual content center (same offset as sprite.hitArea: local (-3, bunHitCY))
+          const vcx = bun.sprite.x + (-3) * sc;
+          const vcy = bun.sprite.y + bunHitCY * sc;
+          const dist = Math.hypot(x - vcx, y - vcy);
           if (dist < clickR && dist < closestDist) { closestDist = dist; closest = bun; }
         }
         if (closest) setPopupRef.current(closest.narration);
@@ -690,9 +719,12 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
           const lb = buns.find(b => b.id === latestReplyBunId && !b.sprite.destroyed);
           if (lb) {
             const wz_lb = lb.body ? lb.body.position.y : lb.toWZ;
-            const _or = (bunRadius + 4) * (CAM_DIST / (wz_lb + CAM_DIST));
-            outlineLayer.circle(lb.sprite.x, lb.sprite.y, _or + 1).stroke({ color: 0x1a0800, width: 2 });
-            outlineLayer.circle(lb.sprite.x, lb.sprite.y, _or).stroke({ color: 0xFFE055, width: 3 });
+            const sc_lb = BUN_SCALE * (CAM_DIST / (wz_lb + CAM_DIST));
+            const _or = (bunRadius + 4) * sc_lb;
+            const vcx_lb = lb.sprite.x + (-3) * sc_lb;
+            const vcy_lb = lb.sprite.y + bunHitCY * sc_lb;
+            outlineLayer.circle(vcx_lb, vcy_lb, _or + 1).stroke({ color: 0x1a0800, width: 2 });
+            outlineLayer.circle(vcx_lb, vcy_lb, _or).stroke({ color: 0xFFE055, width: 3 });
           }
         }
       });
@@ -781,34 +813,58 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
         style={{
           position: 'fixed', bottom: 0, left: 0, right: 0,
           background: '#fff', borderTop: '1px solid #eee',
-          padding: '10px 12px',
-          display: 'flex', gap: 8, alignItems: 'center',
+          padding: '8px 12px 10px',
           maxWidth: 900, margin: '0 auto',
         }}
       >
-        <input
-          value={text}
-          onChange={e => setText(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) submit(); }}
-          placeholder={busy ? '貓在嚼…' : '打字捏包子，然後拖曳瞄準丟（移動 / 解謎 / 查看）'}
-          disabled={busy}
-          autoFocus
-          style={{
-            flex: 1, padding: '9px 12px', fontSize: 14,
-            borderRadius: 6, border: '1px solid #ccc', outline: 'none',
-          }}
-        />
-        <button
-          onClick={submit}
-          disabled={busy}
-          style={{
-            padding: '9px 16px', fontSize: 14, borderRadius: 6,
-            border: '1px solid #ccc', background: '#fff',
-            cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.4 : 1,
-          }}
-        >
-          捏
-        </button>
+        {text === '' && !busy && suggestions.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+            {suggestions.map((s, i) => (
+              <button
+                key={i}
+                onMouseDown={e => {
+                  e.preventDefault(); // keep focus on input
+                  setText(s);
+                  inputRef.current?.focus();
+                }}
+                style={{
+                  padding: '4px 10px', fontSize: 12,
+                  borderRadius: 12, border: '1px solid #ddd',
+                  background: '#f8f4f0', cursor: 'pointer',
+                  color: '#555', whiteSpace: 'nowrap',
+                }}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            ref={inputRef}
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) submit(); }}
+            placeholder={busy ? '貓在嚼…' : '打字捏包子，然後拖曳瞄準丟（移動 / 解謎 / 查看）'}
+            disabled={busy}
+            autoFocus
+            style={{
+              flex: 1, padding: '9px 12px', fontSize: 14,
+              borderRadius: 6, border: '1px solid #ccc', outline: 'none',
+            }}
+          />
+          <button
+            onClick={submit}
+            disabled={busy}
+            style={{
+              padding: '9px 16px', fontSize: 14, borderRadius: 6,
+              border: '1px solid #ccc', background: '#fff',
+              cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.4 : 1,
+            }}
+          >
+            捏
+          </button>
+        </div>
       </div>
     </div>
   );
