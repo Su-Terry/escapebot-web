@@ -9,6 +9,9 @@ export type ActionResult = {
   isWon: boolean;
 };
 
+const MIN_CHEW_MS = 500;
+const minDelay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
 type Props = {
   onAction: (action: string) => Promise<ActionResult>;
   onWin: () => void;
@@ -50,6 +53,8 @@ interface Bun {
   retFromX: number; retFromY: number;
   retCtrlX: number; retCtrlY: number;
   retStartAt: number;
+  // Pre-fetched LLM result (set at spawn time, awaited on hit)
+  pendingResult: Promise<ActionResult> | null;
 }
 
 export default function BunCatScene({ onAction, onWin, initialNarration }: Props) {
@@ -327,16 +332,14 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
         app.stage.removeChild(bun.sprite);
         bun.sprite.destroy();
 
-        catBusy = true;
         catPhase = 'chewing';
-        setBusyRef.current(true);
         cat.texture = texHit;
         cat.scale.set(catVisualScale);
         chewMs = 0;
 
         let result: ActionResult;
         try {
-          result = await onActionRef.current(bun.action);
+          [result] = await Promise.all([bun.pendingResult!, minDelay(MIN_CHEW_MS)]);
         } catch {
           result = { narration: '（無回應）', isWon: false };
         }
@@ -378,6 +381,7 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
           toX, toY, toWX, toWZ,
           dur: 780, startAt: performance.now(),
           retFromX: 0, retFromY: 0, retCtrlX: 0, retCtrlY: 0, retStartAt: 0,
+          pendingResult: null,
         };
         buns.push(bun);
         latestReplyBunId = bun.id;
@@ -422,8 +426,12 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
           fromX: 0, fromY: 0, fromWZ: 0, ctrlX: 0, ctrlY: 0,
           toX: 0, toY: 0, toWX: 0, toWZ: 0, dur: 0, startAt: 0,
           retFromX: 0, retFromY: 0, retCtrlX: 0, retCtrlY: 0, retStartAt: 0,
+          pendingResult: null,
         };
         buns.push(bun);
+        catBusy = true;
+        setBusyRef.current(true);
+        bun.pendingResult = onActionRef.current(action);
 
         sprite.on('pointerover', () => {
           if (bun.phase !== 'at_launch') return;
@@ -434,7 +442,6 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
           if (bun.phase === 'at_launch') bun.sprite.scale.set(BUN_SCALE);
         });
         sprite.on('pointerdown', () => {
-          if (catBusy) return;
           if (bun.phase !== 'at_launch') return;
           bun.phase = 'dragging';
           dragBun = bun;
@@ -593,7 +600,7 @@ export default function BunCatScene({ onAction, onWin, initialNarration }: Props
             if (sx < -220 || sx > W + 220 || wy < -400) {
               returnToLaunch(bun); continue;
             }
-            if (checkHit3D(wx, wy, wz) && !catBusy) {
+            if (checkHit3D(wx, wy, wz) && catPhase === 'idle') {
               void triggerEat(bun); continue;
             }
             if (wy >= groundY) {
