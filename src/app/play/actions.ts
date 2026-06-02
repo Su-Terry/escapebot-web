@@ -16,8 +16,9 @@ function toView(state: WorldState) {
   const loc = state.locations[state.currentLocationId];
 
   // 當前場景可見物件 — 以 item.locationId 為準（authoritative），避免 loc.itemIds 漏列物品
+  // hidden 物件未被發現，不送給前端
   const sceneItems = Object.values(state.items)
-    .filter((item) => item.locationId === state.currentLocationId)
+    .filter((item) => item.locationId === state.currentLocationId && !item.hidden)
     .map((item) => ({
       id: item.id,
       name: item.name,

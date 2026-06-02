@@ -15,6 +15,44 @@ import type { StateChange } from "./types";
 export type { WorldState };
 
 /**
+ * Rule-based detect: return the visible item id the player intends to examine, or null.
+ * Handles common Chinese and English examine verbs followed by an item name.
+ * On match miss the LLM may still emit examine_item — just narration won't see revealed items.
+ */
+function detectExamineTarget(action: string, state: WorldState): string | null {
+  const m = action.trim().match(
+    /^(?:查看|看看|仔細看|觀察|翻翻|檢查|審視|查一下|看一下|examine|look at|inspect|check|search)\s+(.+)$/i,
+  );
+  if (!m) return null;
+  const targetName = m[1].trim();
+  const loc = state.currentLocationId;
+  return (
+    Object.values(state.items).find(
+      (item) =>
+        item.locationId === loc &&
+        !item.hidden &&
+        (item.name === targetName ||
+          item.name.includes(targetName) ||
+          targetName.includes(item.name)),
+    )?.id ?? null
+  );
+}
+
+/** Pre-promote hidden children of targetId so the LLM sees them in the same turn. */
+function promoteHiddenChildren(state: WorldState, targetId: string): WorldState {
+  if (!Object.values(state.items).some((i) => i.belongsTo === targetId && i.hidden)) {
+    return state;
+  }
+  const ws = structuredClone(state);
+  for (const item of Object.values(ws.items)) {
+    if (item.belongsTo === targetId && item.hidden) {
+      item.hidden = false;
+    }
+  }
+  return ws;
+}
+
+/**
  * Recovery: LLM sometimes emits solve_puzzle with a hallucinated or wrong puzzleId.
  * When there is exactly one unsolved puzzle at the current location and the emitted id
  * doesn't match it, silently remap before enforcement so the correct puzzle gets solved.
@@ -77,9 +115,18 @@ export async function processTurn(clerkUserId: string, action: string): Promise<
   const state = await loadWorldState(uuid);
   if (!state) throw new Error("no active scenario");
 
-  const rawResult = await handleTurn(state, action);
+  // Pre-promote hidden items so the LLM sees them in its narration this turn
+  const examineTargetId = detectExamineTarget(action, state);
+  const stateForLLM = examineTargetId ? promoteHiddenChildren(state, examineTargetId) : state;
+
+  const rawResult = await handleTurn(stateForLLM, action);
   // Recover wrong/missing puzzleIds before enforcement
-  const turnResult = { ...rawResult, stateChanges: recoverPuzzleIds(rawResult.stateChanges, state) };
+  let recoveredChanges = recoverPuzzleIds(rawResult.stateChanges, state);
+  // If pre-promoted but LLM didn't emit examine_item, inject it so state gets updated
+  if (examineTargetId && !recoveredChanges.some((sc) => sc.type === "examine_item")) {
+    recoveredChanges = [...recoveredChanges, { type: "examine_item", itemId: examineTargetId }];
+  }
+  const turnResult = { ...rawResult, stateChanges: recoveredChanges };
 
   // Partial apply：逐個驗證，留下合法的，skip 非法的（不拖垮整個 turn）
   let probe = state;
@@ -142,7 +189,7 @@ export async function processTurn(clerkUserId: string, action: string): Promise<
         "NEVER use 「齒輪轉動」「嗡鳴聲」「開始運作」「緩緩升起」or anything that implies progress or success. " +
         "stateChanges must be empty.",
     ];
-    const retryRaw = await handleTurn(state, action, corrections);
+    const retryRaw = await handleTurn(stateForLLM, action, corrections);
     const retryTurn = {
       ...retryRaw,
       stateChanges: recoverPuzzleIds(retryRaw.stateChanges, state),

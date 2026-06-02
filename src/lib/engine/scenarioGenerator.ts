@@ -58,7 +58,8 @@ All field names must match exactly. All id values must be unique across the enti
       "locationId": "<string — locationId where item starts, or 'inventory'>",
       "isTakeable": <bool>,
       "isLocked": <bool — true if another item is required to pick this up>,
-      "unlockItemId": "<string or null>"
+      "unlockItemId": "<string or null>",
+      "belongsTo": "<string or null — if this item is tucked inside/under a furniture piece, put that furniture's item id here; the item will be invisible until the player examines that furniture. null for all normal visible items.>"
     }
   },
   "inventory": [],
@@ -116,6 +117,9 @@ All field names must match exactly. All id values must be unique across the enti
 - Locked items (isLocked: true) need another item in inventory before they can be taken.
 - All items must start in a location (not inventory). inventory starts as [].
 - CRITICAL: Every item must appear in BOTH places: (a) items[X].locationId = "room-id", AND (b) locations["room-id"].itemIds includes X. Omitting an item from itemIds makes it permanently invisible and untakeable. There are no sub-containers — items sit directly in a location's itemIds list.
+- To hide a small item inside/under furniture: set belongsTo to the furniture's item id. The item will be invisible until the player examines that furniture. belongsTo is null for all normal visible items. Do NOT use belongsTo for every item — only when it adds exploration depth. Items critical to the main solution path should NOT be hidden behind an examine step.
+- belongsTo has NOTHING to do with isLocked. isLocked means the player needs another item in inventory to pick this up. Non-takeable items (machines, computers, furniture) must always have belongsTo:null — they are large visible objects.
+- Do NOT output a "hidden" field — the engine derives it automatically from belongsTo.
 
 ### Puzzles
 - Create 2 to 3 puzzles.
@@ -255,6 +259,18 @@ function repairItemConsistency(ws: WorldState): number {
 }
 
 /**
+ * Derive item.hidden from item.belongsTo for the initial WorldState.
+ * hidden == (belongsTo != null) holds at generation time only — runtime examine_item
+ * flips hidden to false while leaving belongsTo as historical metadata.
+ * Must be called once after generation, never during turn processing.
+ */
+function deriveHiddenFields(ws: WorldState): void {
+  for (const item of Object.values(ws.items)) {
+    item.hidden = item.belongsTo != null;
+  }
+}
+
+/**
  * Validate game-logic constraints not expressible in the Zod schema.
  * Only checks true deadlocks (puzzle locked inside its own room) — these cannot be
  * auto-repaired and require regeneration. Bidirectional item consistency is handled
@@ -273,6 +289,25 @@ function validateScenarioLogic(ws: WorldState): string[] {
           `Deadlock: puzzle '${puzzleId}' is inside '${locId}' which it locks — player can never solve it`,
         );
       }
+    }
+  }
+
+  // belongsTo reachability: parent must exist, be in same location, and not itself have a belongsTo (one level only)
+  for (const [itemId, item] of Object.entries(ws.items)) {
+    if (!item.belongsTo) continue;
+    const parent = ws.items[item.belongsTo];
+    if (!parent) {
+      violations.push(
+        `Item '${itemId}' belongsTo '${item.belongsTo}' which does not exist`,
+      );
+    } else if (parent.locationId !== item.locationId) {
+      violations.push(
+        `Item '${itemId}' and its parent '${item.belongsTo}' are in different locations`,
+      );
+    } else if (parent.belongsTo != null) {
+      violations.push(
+        `Item '${itemId}' parent '${item.belongsTo}' also has belongsTo — nested hidden items not supported (one level only)`,
+      );
     }
   }
 
@@ -349,6 +384,7 @@ export async function generateScenario(
         if (repairs > 0) {
           console.warn(`scenarioGenerator attempt ${attempt} auto-repaired ${repairs} item(s) missing from location itemIds`);
         }
+        deriveHiddenFields(ws);
         const logicViolations = validateScenarioLogic(ws);
         if (logicViolations.length > 0) {
           console.warn(
@@ -380,6 +416,7 @@ export async function generateScenario(
           if (repairs > 0) {
             console.warn(`scenarioGenerator attempt ${attempt} recovery auto-repaired ${repairs} item(s) missing from location itemIds`);
           }
+          deriveHiddenFields(ws);
           const logicViolations = validateScenarioLogic(ws);
           if (logicViolations.length > 0) {
             console.warn(
@@ -455,6 +492,8 @@ function level1Fallback(userId: string): WorldState {
         locationId: "studio",
         isTakeable: false,
         isLocked: false,
+        hidden: false,
+        belongsTo: null,
       },
       "office-desk": {
         id: "office-desk",
@@ -463,6 +502,8 @@ function level1Fallback(userId: string): WorldState {
         locationId: "studio",
         isTakeable: false,
         isLocked: false,
+        hidden: false,
+        belongsTo: null,
       },
       notebook: {
         id: "notebook",
@@ -471,6 +512,8 @@ function level1Fallback(userId: string): WorldState {
         locationId: "studio",
         isTakeable: true,
         isLocked: false,
+        hidden: false,
+        belongsTo: null,
       },
     },
     inventory: [],

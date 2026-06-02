@@ -36,7 +36,7 @@ Produce a TurnResult JSON:
   "narration": "<string>",
   "stateChanges": [
     {
-      "type": "<move_player | take_item | use_item | move_item | solve_puzzle>",
+      "type": "<move_player | take_item | use_item | move_item | solve_puzzle | examine_item>",
       "itemId": "<string or null>",
       "fromLocation": "<string or null>",
       "toLocation": "<string or null>",
@@ -56,6 +56,7 @@ take_item: itemId must be in current location's itemIds and isTakeable.
 use_item: itemId must be in player's inventory.
 move_item: itemId in current location; toLocation is a valid location id.
 solve_puzzle: puzzleId is a puzzle in current location; set attemptedSolution.
+examine_item: itemId must be a visible item in the current location. Use when the player examines, inspects, or looks at an object (查看/看看/觀察/翻翻/檢查 etc.). Some furniture has items hidden inside/under it — examining reveals them. Always emit this when the player's intent is to inspect a specific object.
 
 ## Puzzle Solve Trigger Rules (CRITICAL)
 
@@ -292,6 +293,13 @@ function safeContext(state: WorldState): Record<string, unknown> {
   const puzzles = data["puzzles"] as Record<string, Record<string, unknown>>;
   for (const puzzle of Object.values(puzzles)) {
     delete puzzle["solution"];
+  }
+  // Strip hidden items — LLM must not know about undiscovered items
+  const items = data["items"] as Record<string, Record<string, unknown>>;
+  for (const id of Object.keys(items)) {
+    if (items[id]["hidden"] === true) {
+      delete items[id];
+    }
   }
   const history = data["history"] as unknown[];
   data["history"] = history.slice(-MAX_HISTORY);

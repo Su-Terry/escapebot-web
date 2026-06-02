@@ -25,6 +25,10 @@ export const ItemSchema = z.object({
   isLocked: z.boolean().default(false),
   /** item required in inventory to take this */
   unlockItemId: z.string().nullable().optional(),
+  /** true until player examines the parent item — not shown in scene or sent to LLM */
+  hidden: z.boolean().default(false),
+  /** id of the item (furniture/container) that, when examined, reveals this item */
+  belongsTo: z.string().nullable().default(null),
 });
 export type Item = z.infer<typeof ItemSchema>;
 
@@ -60,6 +64,7 @@ export const StateChangeTypeSchema = z.enum([
   "use_item",
   "move_item",
   "solve_puzzle",
+  "examine_item",
 ]);
 export type StateChangeType = z.infer<typeof StateChangeTypeSchema>;
 

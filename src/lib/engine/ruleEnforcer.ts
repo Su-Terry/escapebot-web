@@ -119,6 +119,19 @@ function validateChange(
         v.push(`solve_puzzle: wrong solution for puzzle '${sc.puzzleId}'`);
       }
     }
+  } else if (sc.type === "examine_item") {
+    if (!sc.itemId) {
+      v.push("examine_item missing item_id");
+    } else if (!itemIds.has(sc.itemId)) {
+      v.push(`examine_item: unknown item '${sc.itemId}'`);
+    } else {
+      const item = ws.items[sc.itemId];
+      if (item.locationId !== ws.currentLocationId) {
+        v.push(`examine_item: '${sc.itemId}' is not in current location`);
+      } else if (item.hidden) {
+        v.push(`examine_item: '${sc.itemId}' is hidden`);
+      }
+    }
   }
 
   return v;
@@ -169,6 +182,13 @@ function applyChange(ws: WorldState, sc: StateChange): void {
       const loc = ws.locations[ws.currentLocationId];
       if (!loc.itemIds.includes(puzzle.rewardItemId)) loc.itemIds.push(puzzle.rewardItemId);
       ws.items[puzzle.rewardItemId].locationId = ws.currentLocationId;
+    }
+  } else if (sc.type === "examine_item") {
+    const targetId = sc.itemId!;
+    for (const item of Object.values(ws.items)) {
+      if (item.belongsTo === targetId && item.hidden) {
+        item.hidden = false;
+      }
     }
   }
 }
