@@ -83,8 +83,13 @@ export async function processTurn(clerkUserId: string, action: string): Promise<
   const prevState = await loadWorldState(uuid);
   if (!prevState) throw new Error("no active scenario");
 
+  const tTurn = Date.now();
+  console.info(`[turn] start action=${JSON.stringify(action.slice(0, 80))}`);
+
   // ── Phase 1: Extract intent (stateChanges only) ───────────────────────────
+  const tP1 = Date.now();
   let intents = await extractIntent(prevState, action);
+  console.info(`[turn] Phase1 extractIntent done in ${Date.now() - tP1}ms intents=${intents.length}`);
 
   // Recover hallucinated puzzleIds before Phase 2
   intents = recoverPuzzleIds(intents, prevState);
@@ -123,10 +128,12 @@ export async function processTurn(clerkUserId: string, action: string): Promise<
 
       // Semantic verdict from judge (solution stays server-side)
       const attempted = sc.attemptedSolution ?? action.trim();
+      const tP2 = Date.now();
       const verdict = await judgeAnswer(
         { id: puzzle.id, description: puzzle.description, solution: puzzle.solution },
         attempted,
       );
+      console.info(`[turn] Phase2 judgeAnswer done in ${Date.now() - tP2}ms verdict=${verdict.verdict}`);
       verdicts.set(puzzleId, verdict);
       console.info(
         `[solve_puzzle judge] puzzleId=${puzzleId} attempted=${JSON.stringify(attempted)} verdict=${verdict.verdict}`,
@@ -177,6 +184,7 @@ export async function processTurn(clerkUserId: string, action: string): Promise<
 
   // ── Phase 4: Generate narration from the determined outcome ───────────────
   // prevState provides history; probe (newState) provides post-apply world.
+  const tP4 = Date.now();
   let narrationResult = await generateNarration(
     prevState,
     probe,
@@ -185,10 +193,12 @@ export async function processTurn(clerkUserId: string, action: string): Promise<
     verdicts,
     action,
   );
+  console.info(`[turn] Phase4 generateNarration (1st) done in ${Date.now() - tP4}ms`);
 
   // Cross-check acknowledgedOutcomes — catch narration that contradicts rejected changes
   if (hasNarrationContradiction(narrationResult.acknowledgedOutcomes, rejectedChanges, verdicts)) {
     console.warn("[narration-crosscheck] contradiction detected, retrying narration once");
+    const tP4r = Date.now();
     narrationResult = await generateNarration(
       prevState,
       probe,
@@ -197,11 +207,14 @@ export async function processTurn(clerkUserId: string, action: string): Promise<
       verdicts,
       action,
     );
+    console.info(`[turn] Phase4 generateNarration (crosscheck-retry) done in ${Date.now() - tP4r}ms`);
     if (hasNarrationContradiction(narrationResult.acknowledgedOutcomes, rejectedChanges, verdicts)) {
       console.error("[narration-crosscheck] retry also contradicted, using deterministic fallback");
       narrationResult = buildFallbackNarration(appliedChanges, rejectedChanges, verdicts);
     }
   }
+
+  console.info(`[turn] total processTurn done in ${Date.now() - tTurn}ms`);
 
   // ── Finalize: commit narration to history, check win, save ────────────────
   const finalState = finalizeTurn(probe, narrationResult.narration, action);

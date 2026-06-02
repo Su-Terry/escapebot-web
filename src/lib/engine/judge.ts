@@ -55,28 +55,33 @@ export async function judgeAnswer(
     `Player's attempt: ${attemptedSolution}`;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
+    const tAttempt = Date.now();
+    console.info(`[judge] attempt ${attempt} start puzzleId=${puzzle.id}`);
     try {
       const { object, usage } = await generateObject({
         model: google(MODEL),
         schema: VerdictSchema,
         system: JUDGE_SYSTEM_PROMPT,
         prompt,
+        abortSignal: AbortSignal.timeout(25_000),
       });
+      console.info(`[judge] attempt ${attempt} ok in ${Date.now() - tAttempt}ms verdict=${object.verdict}`);
       logUsage(usage, object.verdict);
       return object;
     } catch (err) {
-      if (err instanceof NoObjectGeneratedError && err.text) {
+      const isTimeout = err instanceof Error && err.name === "TimeoutError";
+      const errLabel = isTimeout ? "TIMEOUT" : (err instanceof Error ? err.constructor.name : String(err));
+      console.warn(`[judge] attempt ${attempt} failed in ${Date.now() - tAttempt}ms error=${errLabel}`);
+      if (!isTimeout && err instanceof NoObjectGeneratedError && err.text) {
+        console.warn(`[judge] attempt ${attempt} raw text (first 500): ${err.text.slice(0, 500)}`);
         try {
           const result = VerdictSchema.parse(JSON.parse(err.text));
-          console.warn(`judge attempt ${attempt} recovered via raw parse, verdict=${result.verdict}`);
+          console.warn(`[judge] attempt ${attempt} recovered via raw parse verdict=${result.verdict}`);
           return result;
-        } catch {
-          // fall through to retry
+        } catch (parseErr) {
+          console.warn(`[judge] attempt ${attempt} raw parse also failed: ${parseErr}`);
         }
       }
-      console.warn(
-        `judge attempt ${attempt} failed: ${err instanceof Error ? err.constructor.name : String(err)}`,
-      );
     }
   }
 
