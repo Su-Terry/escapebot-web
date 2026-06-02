@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { MousePointer2, Grab } from 'lucide-react';
 import type { Application, Sprite, Graphics as PixiGraphics } from 'pixi.js';
 import type * as MatterNS from 'matter-js';
 
@@ -1048,12 +1049,14 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
               width: 36, height: 36, borderRadius: 8,
               border: `2px solid ${!gloveMode ? '#b07030' : '#ddd'}`,
               background: !gloveMode ? '#fff3e0' : '#f5f5f5',
-              cursor: 'pointer', fontSize: 18, lineHeight: '32px',
+              cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: !gloveMode ? '#7a4520' : '#bbb',
               boxShadow: !gloveMode ? '0 1px 4px rgba(0,0,0,0.18)' : 'none',
               transition: 'all 0.15s',
             }}
           >
-            👆
+            <MousePointer2 size={18} strokeWidth={1.75}/>
           </button>
           <button
             onClick={() => toggleGloveMode(true)}
@@ -1062,19 +1065,21 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
               width: 36, height: 36, borderRadius: 8,
               border: `2px solid ${gloveMode ? '#b07030' : '#ddd'}`,
               background: gloveMode ? '#fff3e0' : '#f5f5f5',
-              cursor: 'pointer', fontSize: 18, lineHeight: '32px',
+              cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: gloveMode ? '#7a4520' : '#bbb',
               boxShadow: gloveMode ? '0 1px 4px rgba(0,0,0,0.18)' : 'none',
               transition: 'all 0.15s',
             }}
           >
-            🧤
+            <Grab size={18} strokeWidth={1.75}/>
           </button>
         </div>
       </div>
 
       <div style={{ fontSize: 11, color: '#bbb', marginTop: 5, textAlign: 'center' }}>
         {gloveMode
-          ? '手套模式：拖動落地包子撥來撥去 · 切回 👆 讀回覆'
+          ? '手套模式：拖動落地包子撥來撥去 · 切回指標模式讀回覆'
           : '把包子往後拉放開丟給貓 · 落地後點包子讀回覆 · 丟歪的包子會自動飛回'}
       </div>
 
