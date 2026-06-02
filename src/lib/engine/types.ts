@@ -79,7 +79,7 @@ export const StateChangeSchema = z.object({
 });
 export type StateChange = z.infer<typeof StateChangeSchema>;
 
-// ── TurnResult ────────────────────────────────────────────────────────────────
+// ── TurnResult (legacy — combined intent+narration, kept for handleTurn compat) ─
 
 export const TurnResultSchema = z.object({
   narration: z.string(),
@@ -87,6 +87,29 @@ export const TurnResultSchema = z.object({
   isWon: z.boolean().default(false),
 });
 export type TurnResult = z.infer<typeof TurnResultSchema>;
+
+// ── Verdict (judge output for solve_puzzle) ───────────────────────────────────
+
+export const VerdictSchema = z.object({
+  verdict: z.enum(["solved", "ambiguous", "wrong"]),
+  /** Logging only — never shown to players. */
+  reason: z.string(),
+});
+export type Verdict = z.infer<typeof VerdictSchema>;
+
+// ── NarrationResult (Phase 4 output) ─────────────────────────────────────────
+
+export const NarrationResultSchema = z.object({
+  narration: z.string(),
+  /**
+   * Structured list of what this narration describes.
+   * Format: "apply:{type}", "reject:{type}", "apply:solve_puzzle:solved",
+   *         "reject:solve_puzzle:{verdict}", "query"
+   * Engine cross-checks against actual appliedChanges + rejectedChanges.
+   */
+  acknowledgedOutcomes: z.array(z.string()).default([]),
+});
+export type NarrationResult = z.infer<typeof NarrationResultSchema>;
 
 // ── WorldState ────────────────────────────────────────────────────────────────
 

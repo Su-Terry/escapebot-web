@@ -1,4 +1,4 @@
-import { apply, applyFallback, enforceStateChange } from "./ruleEnforcer";
+import { apply, applyFallback, enforceStateChange, finalizeTurn } from "./ruleEnforcer";
 import {
   getOrCreateUserByClerkId,
   loadWorldState,
@@ -7,50 +7,12 @@ import {
   deleteWorldState,
 } from "./sessionStore";
 import { generateScenario } from "./scenarioGenerator";
-import { handleTurn } from "./turnHandler";
+import { extractIntent, generateNarration, buildFallbackNarration } from "./turnHandler";
+import { judgeAnswer } from "./judge";
 import { WorldStateSchema } from "./types";
-import type { WorldState } from "./types";
-import type { StateChange } from "./types";
+import type { WorldState, StateChange, Verdict } from "./types";
 
 export type { WorldState };
-
-/**
- * Rule-based detect: return the visible item id the player intends to examine, or null.
- * Handles common Chinese and English examine verbs followed by an item name.
- * On match miss the LLM may still emit examine_item — just narration won't see revealed items.
- */
-function detectExamineTarget(action: string, state: WorldState): string | null {
-  const m = action.trim().match(
-    /^(?:查看|看看|仔細看|觀察|翻翻|檢查|審視|查一下|看一下|examine|look at|inspect|check|search)\s+(.+)$/i,
-  );
-  if (!m) return null;
-  const targetName = m[1].trim();
-  const loc = state.currentLocationId;
-  return (
-    Object.values(state.items).find(
-      (item) =>
-        item.locationId === loc &&
-        !item.hidden &&
-        (item.name === targetName ||
-          item.name.includes(targetName) ||
-          targetName.includes(item.name)),
-    )?.id ?? null
-  );
-}
-
-/** Pre-promote hidden children of targetId so the LLM sees them in the same turn. */
-function promoteHiddenChildren(state: WorldState, targetId: string): WorldState {
-  if (!Object.values(state.items).some((i) => i.belongsTo === targetId && i.hidden)) {
-    return state;
-  }
-  const ws = structuredClone(state);
-  for (const item of Object.values(ws.items)) {
-    if (item.belongsTo === targetId && item.hidden) {
-      item.hidden = false;
-    }
-  }
-  return ws;
-}
 
 /**
  * Recovery: LLM sometimes emits solve_puzzle with a hallucinated or wrong puzzleId.
@@ -106,120 +68,164 @@ export async function generate(
 }
 
 /**
- * Run one game turn: call Turn Handler, validate, apply (with up to 2 retries).
- * On persistent rule violation failure, records 'Nothing happens.' via applyFallback.
+ * Run one game turn using the four-phase architecture:
+ *   Phase 1  extractIntent   — LLM outputs stateChanges only, no narration
+ *   Phase 2  judge + enforce — engine rules for all types; LLM judge for solve_puzzle
+ *   Phase 3  apply           — state updated before narration is written
+ *   Phase 4  generateNarration — LLM narrates the already-determined outcome
+ *
+ * This ensures narration can never lead state: the LLM in Phase 4 sees the post-apply
+ * world and is told explicitly what succeeded and what failed.
  * Throws if no active scenario exists for the user.
  */
 export async function processTurn(clerkUserId: string, action: string): Promise<WorldState> {
   const uuid = await resolveUuid(clerkUserId);
-  const state = await loadWorldState(uuid);
-  if (!state) throw new Error("no active scenario");
+  const prevState = await loadWorldState(uuid);
+  if (!prevState) throw new Error("no active scenario");
 
-  // Pre-promote hidden items so the LLM sees them in its narration this turn
-  const examineTargetId = detectExamineTarget(action, state);
-  const stateForLLM = examineTargetId ? promoteHiddenChildren(state, examineTargetId) : state;
+  // ── Phase 1: Extract intent (stateChanges only) ───────────────────────────
+  let intents = await extractIntent(prevState, action);
 
-  const rawResult = await handleTurn(stateForLLM, action);
-  // Recover wrong/missing puzzleIds before enforcement
-  let recoveredChanges = recoverPuzzleIds(rawResult.stateChanges, state);
-  // If pre-promoted but LLM didn't emit examine_item, inject it so state gets updated
-  if (examineTargetId && !recoveredChanges.some((sc) => sc.type === "examine_item")) {
-    recoveredChanges = [...recoveredChanges, { type: "examine_item", itemId: examineTargetId }];
-  }
-  const turnResult = { ...rawResult, stateChanges: recoveredChanges };
+  // Recover hallucinated puzzleIds before Phase 2
+  intents = recoverPuzzleIds(intents, prevState);
 
-  // Partial apply：逐個驗證，留下合法的，skip 非法的（不拖垮整個 turn）
-  let probe = state;
-  const validChanges: typeof turnResult.stateChanges = [];
-  const skipped: string[] = [];
-
-  for (const sc of turnResult.stateChanges) {
-    const result = enforceStateChange(probe, sc);
-    if (result.valid && result.updatedState) {
-      probe = result.updatedState;
-      validChanges.push(sc);
-    } else {
-      skipped.push(`${sc.type}: ${result.reason ?? "rejected"}`);
-      if (sc.type === "solve_puzzle") {
-        console.warn(
-          `[solve_puzzle rejected] puzzleId=${sc.puzzleId} reason=${result.reason}` +
-            ` currentLoc=${probe.currentLocationId}` +
-            ` puzzleLoc=${sc.puzzleId ? (probe.puzzles[sc.puzzleId]?.locationId ?? "unknown") : "?"}` +
-            ` attempted=${JSON.stringify(sc.attemptedSolution)}`,
-        );
-      } else if (sc.type === "take_item") {
-        const item = sc.itemId ? probe.items[sc.itemId] : undefined;
-        console.warn(
-          `[take_item rejected] itemId=${sc.itemId} reason=${result.reason}` +
-            ` currentLoc=${probe.currentLocationId}` +
-            ` itemLoc=${item?.locationId ?? "unknown"}`,
-        );
-      }
-    }
-  }
-
-  if (skipped.length > 0) {
-    console.warn(
-      `processTurn action ${JSON.stringify(action)} skipped: ${skipped.join("; ")}` +
-        ` (applied: ${validChanges.map((c) => c.type).join(", ") || "none"})`,
-    );
-  }
-
-  // When solve_puzzle is rejected for wrong solution the LLM has already written a
-  // "success" narration.  Storing that in history gives the next turn contradictory
-  // context (history: "door opened"; state: isSolved=false) which causes the LLM to
-  // keep re-narrating success on every subsequent attempt.
-  // Fix: if any solve_puzzle was rejected for wrong solution, retry handleTurn with
-  // the violations as corrections so the LLM rewrites a "nothing happened" narration.
-  const wrongSolutionSkips = skipped.filter(
-    (s) => s.includes("solve_puzzle") && s.includes("wrong solution"),
+  // Backfill missing attemptedSolution (flash occasionally omits it)
+  intents = intents.map((sc) =>
+    sc.type === "solve_puzzle" && !sc.attemptedSolution
+      ? { ...sc, attemptedSolution: action.trim() }
+      : sc,
   );
 
-  let cleanResult: { narration: string; stateChanges: typeof validChanges; isWon: boolean };
+  // ── Phase 2: Validate + judge each intent ────────────────────────────────
+  let probe = prevState;
+  const appliedChanges: StateChange[] = [];
+  const rejectedChanges: Array<{ change: StateChange; reason: string }> = [];
+  const verdicts = new Map<string, Verdict>();
 
-  if (wrongSolutionSkips.length > 0) {
-    const corrections = [
-      ...wrongSolutionSkips.map((s) => s.replace(/^solve_puzzle: /, "")),
-      // Explicit narration constraint: failure must be unambiguous.
-      // Without this, the LLM writes progress-sounding narration ("齒輪轉動、嗡鳴聲")
-      // that players cannot distinguish from success.
-      "The player's answer was WRONG and NOTHING changed in the world. " +
-        "Narration MUST unambiguously express failure — e.g. " +
-        "「機關紋絲不動」「天體模型沒有反應，順序似乎不對」「發出錯誤的聲響，石門沒有移動」. " +
-        "NEVER use 「齒輪轉動」「嗡鳴聲」「開始運作」「緩緩升起」or anything that implies progress or success. " +
-        "stateChanges must be empty.",
-    ];
-    const retryRaw = await handleTurn(stateForLLM, action, corrections);
-    const retryTurn = {
-      ...retryRaw,
-      stateChanges: recoverPuzzleIds(retryRaw.stateChanges, state),
-    };
+  for (const sc of intents) {
+    if (sc.type === "solve_puzzle") {
+      // Structural pre-checks (engine rules, no judge)
+      const puzzleId = sc.puzzleId ?? null;
+      const puzzle = puzzleId ? probe.puzzles[puzzleId] : null;
 
-    let retryProbe = state;
-    const retryValid: typeof validChanges = [];
-    for (const sc of retryTurn.stateChanges) {
-      const r = enforceStateChange(retryProbe, sc);
-      if (r.valid && r.updatedState) {
-        retryProbe = r.updatedState;
-        retryValid.push(sc);
+      if (!puzzleId || !puzzle) {
+        rejectedChanges.push({ change: sc, reason: `solve_puzzle: unknown puzzle '${puzzleId}'` });
+        continue;
+      }
+      if (puzzle.locationId !== probe.currentLocationId) {
+        rejectedChanges.push({ change: sc, reason: `solve_puzzle: puzzle not in current location` });
+        continue;
+      }
+      if (puzzle.isSolved) {
+        rejectedChanges.push({ change: sc, reason: `solve_puzzle: already solved` });
+        continue;
+      }
+
+      // Semantic verdict from judge (solution stays server-side)
+      const attempted = sc.attemptedSolution ?? action.trim();
+      const verdict = await judgeAnswer(
+        { id: puzzle.id, description: puzzle.description, solution: puzzle.solution },
+        attempted,
+      );
+      verdicts.set(puzzleId, verdict);
+      console.info(
+        `[solve_puzzle judge] puzzleId=${puzzleId} attempted=${JSON.stringify(attempted)} verdict=${verdict.verdict}`,
+      );
+
+      if (verdict.verdict === "solved") {
+        // Apply directly — judge approval supersedes normalizeSolution
+        const ws = structuredClone(probe);
+        ws.puzzles[puzzleId].isSolved = true;
+        if (puzzle.rewardItemId) {
+          const loc = ws.locations[ws.currentLocationId];
+          if (!loc.itemIds.includes(puzzle.rewardItemId)) loc.itemIds.push(puzzle.rewardItemId);
+          ws.items[puzzle.rewardItemId].locationId = ws.currentLocationId;
+        }
+        probe = ws;
+        appliedChanges.push(sc);
       } else {
-        console.warn(`[solve_puzzle correction-retry skipped] ${sc.type}: ${r.reason}`);
+        rejectedChanges.push({ change: sc, reason: `solve_puzzle: ${verdict.verdict}` });
+      }
+    } else {
+      // Pure engine validation for all other action types
+      const result = enforceStateChange(probe, sc);
+      if (result.valid && result.updatedState) {
+        probe = result.updatedState;
+        appliedChanges.push(sc);
+      } else {
+        rejectedChanges.push({ change: sc, reason: result.reason ?? "rejected" });
+        if (sc.type === "take_item") {
+          const item = sc.itemId ? probe.items[sc.itemId] : undefined;
+          console.warn(
+            `[take_item rejected] itemId=${sc.itemId} reason=${result.reason}` +
+              ` currentLoc=${probe.currentLocationId} itemLoc=${item?.locationId ?? "unknown"}`,
+          );
+        }
       }
     }
-    console.warn(
-      `[solve_puzzle narration-fix] rewrote narration after wrong-solution rejection` +
-        ` (retry applied: ${retryValid.map((c) => c.type).join(", ") || "none"})`,
-    );
-    cleanResult = { ...retryTurn, stateChanges: retryValid };
-  } else {
-    cleanResult = { ...turnResult, stateChanges: validChanges };
   }
 
-  // Pass action so it's stored in history — LLM needs Player: lines for context
-  const updated = apply(state, cleanResult, action);
+  if (rejectedChanges.length > 0) {
+    console.warn(
+      `processTurn rejected: ${rejectedChanges.map((r) => `${r.change.type}(${r.reason})`).join("; ")}` +
+        ` applied: ${appliedChanges.map((c) => c.type).join(", ") || "none"}`,
+    );
+  }
 
-  await saveWorldState(uuid, updated);
-  return updated;
+  // ── Phase 3: State is now authoritative (probe = post-apply state) ────────
+  // (probe accumulated all changes via enforceStateChange / direct apply above)
+
+  // ── Phase 4: Generate narration from the determined outcome ───────────────
+  // prevState provides history; probe (newState) provides post-apply world.
+  let narrationResult = await generateNarration(
+    prevState,
+    probe,
+    appliedChanges,
+    rejectedChanges,
+    verdicts,
+    action,
+  );
+
+  // Cross-check acknowledgedOutcomes — catch narration that contradicts rejected changes
+  if (hasNarrationContradiction(narrationResult.acknowledgedOutcomes, rejectedChanges, verdicts)) {
+    console.warn("[narration-crosscheck] contradiction detected, retrying narration once");
+    narrationResult = await generateNarration(
+      prevState,
+      probe,
+      appliedChanges,
+      rejectedChanges,
+      verdicts,
+      action,
+    );
+    if (hasNarrationContradiction(narrationResult.acknowledgedOutcomes, rejectedChanges, verdicts)) {
+      console.error("[narration-crosscheck] retry also contradicted, using deterministic fallback");
+      narrationResult = buildFallbackNarration(appliedChanges, rejectedChanges, verdicts);
+    }
+  }
+
+  // ── Finalize: commit narration to history, check win, save ────────────────
+  const finalState = finalizeTurn(probe, narrationResult.narration, action);
+  await saveWorldState(uuid, finalState);
+  return finalState;
+}
+
+/**
+ * Detect if acknowledgedOutcomes claims a rejected action succeeded.
+ * This is the structural cross-check: LLM must not claim "apply:X" for a rejected X.
+ */
+function hasNarrationContradiction(
+  acknowledgedOutcomes: string[],
+  rejectedChanges: Array<{ change: StateChange; reason: string }>,
+  verdicts: Map<string, Verdict>,
+): boolean {
+  for (const { change } of rejectedChanges) {
+    if (change.type === "solve_puzzle") {
+      if (acknowledgedOutcomes.includes("apply:solve_puzzle:solved")) return true;
+    } else {
+      if (acknowledgedOutcomes.includes(`apply:${change.type}`)) return true;
+    }
+  }
+  return false;
 }
 
 /** Load the user's active WorldState, or null if none exists. */

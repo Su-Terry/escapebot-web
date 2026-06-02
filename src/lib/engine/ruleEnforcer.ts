@@ -213,6 +213,19 @@ export function applyFallback(worldState: WorldState, action: string): WorldStat
 }
 
 /**
+ * Finalize a turn after all stateChanges have been applied via enforceStateChange.
+ * Checks win condition, increments turnCount, appends narration to history.
+ * Called by processTurn after Phase 4 narration is confirmed.
+ */
+export function finalizeTurn(state: WorldState, narration: string, action: string): WorldState {
+  const ws = structuredClone(state);
+  ws.isWon = checkWin(ws);
+  ws.turnCount += 1;
+  ws.history.push({ action, narration });
+  return ws;
+}
+
+/**
  * Validate a single StateChange and, if valid, return the state with it applied.
  * Does not increment turnCount or append history — callers use apply() for full turn semantics.
  */
