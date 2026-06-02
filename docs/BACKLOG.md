@@ -118,6 +118,24 @@ Player H 主動拉新玩家進 server.
 
 ## Findings — 已解決 (shipped)
 
+### Phase 2 回合處理重構 (web, 2026-06-02)
+
+- **F-turnloop-v2** [engine 架構級, 根治一族 coupled 問題]: 回合處理改「意圖→判定→敘述」四拍, 根治「narration 領先 state、演假成功、snowball」這一整族(鎖門穿透 / 假結局 / 假 solve / 假 move / 石門事件 F-stonedoor 的 A)。
+  **根**: 舊架構 narration + stateChange 由同一 LLM call 一起生, stateChange 被 reject 後 narration 照樣入 history → LLM 下回合讀自己假話繼續演。一個個修是打地鼠(修過鎖門穿透/假結局, 石門又用新組合穿透)。
+  **四拍 (定案)**:
+  - Phase 1 Intent: extractIntent() — LLM 只輸出 stateChanges JSON, 不寫 narration。
+  - Phase 2 Judge: engine 規則判 move/take/use/examine; solve_puzzle 走獨立 LLM judge(judge.ts judgeAnswer)→ Verdict {solved/ambiguous/wrong}, 區別 similarity(等價可接受)/ ambiguity(模糊→澄清反問, 不算錯)/ wrong。judge 只分類、不碰 state、不寫 narration; 2 retry 後 safe default = ambiguous(不冤判對/錯)。
+  - Phase 3 Apply: engine 唯一改 state 處(examine 的 hidden children 在此 flip)。
+  - Phase 4 Narrate: generateNarration() — LLM 拿已定的 newState + appliedChanges + verdicts 寫 narration, 永遠跟 state 一致。輸出帶 acknowledgedOutcomes(申報 narration 對應哪些事件), engine 交叉核查 applied/rejectedChanges, 不一致 → retry 1 次 → 仍不一致走 buildFallbackNarration(deterministic、不呼叫 LLM、不可能矛盾)。
+  - finalizeTurn(): 收尾 win check + turnCount++ + history.push, 不動遊戲物件。
+  **吸收 / 刪除**: visibility 三補丁(prePromoteExamine/detectExamineTarget/promoteHiddenChildren)刪除 —— examine 走四拍(Phase 3 promote 在 Phase 4 narrate 前), 時序問題從根消失。wrong-solution retry 刪除(被 judge+narrate 取代)。recoverPuzzleIds 保留 Phase1→2。processTurn 外部 signature 不變(replay/resume 透明、舊存檔相容)。
+  **殘留細縫 (已知、不宣稱杜絕)**: Phase 4 narration 仍是自由 prose, 無 zero-LLM 完全結構防線。acknowledgedOutcomes 能抓「顯性假成功」(演了沒發生的事件), 但抓不到「模糊暗示」(門縫好像動了一下 —— 語意不算謊但可能誤導)。傷害遠小於石門(不污染 state、不 snowball, 因 state 已是真相), prompt 壓 + 實玩抓。比舊架構是質變: 石門那種結構性必然 → 偶爾措辭偏離。
+  **latency**: 一般動作 2 call(intent+narrate, ~1.5x)、解謎 3 call(intent+judge+narrate)。judge/intent 輸出小、快; 用「Phase1+2 在捏包子前背景跑 + Phase4 貓咀嚼掩護」吸收。
+  **實玩驗過 (2026-06-02)**: ✅ 假 solve(答 0000 →「沒反應、不正確」, 不演成功) ✅ 假 move(前往鎖著的種子庫 →「紋絲不動、鎖著」, 不穿越、currentLocationId 不變) ✅ solved + 語意正規化(答「73一九」→ judge 認出 = 7319 判 solved, 證明非死字串比) ✅ examine 空物件誠實(查看發電機「沒發現其他細節」) ✅ 正常一局通關。**石門 bug 兩半(假 solve + 假 move)都不再發生。** 待驗: ambiguous 反問(要語意謎題才測得到, 數字謎測不出)、latency 手感長期觀察。
+  **檔案**: types.ts(Verdict/NarrationResult)、judge.ts(新)、turnHandler.ts(extractIntent/generateNarration/buildFallbackNarration, 舊 handleTurn 保留不呼叫)、ruleEnforcer.ts(finalizeTurn)、index.ts(processTurn 全換、刪三補丁+retry)。
+
+- **F-visibility** [engine, 已實作 — 部分流程被 F-turnloop-v2 吸收]: 逐步揭露機制 —— Item 加 hidden + belongsTo, hidden 由 deriveHiddenFields 從 belongsTo 推導(LLM 只填 belongsTo、不填 hidden, 從結構杜絕不一致, 電腦這種 top-level 鎖住物件 belongsTo:null → hidden:false 自動可見)。examine 家具 promote 其 hidden children。toView/safeContext 依 visibility 篩。deriveHiddenFields 只在 generateScenario 跑、load/replay 不重推導(examine 過的值保留、replay 載 initialState 全藏從頭探索)。**註**: 原本的 examine 時序補丁(prePromoteExamine 等)已被 F-turnloop-v2 四拍吸收刪除。**待補**: reward item 的「solve 揭露」這條路徑(見待辦 F-reward-reveal); generator 生 belongsTo 的比例待多玩觀察。
+
 ### Phase 1.5 (Discord production, verified by 2 real players)
 
 - **F1**: 解謎成功 narration 模糊 → 明確說「解開了」+ 物理變化 + 因果。✅
@@ -182,6 +200,20 @@ Player H 主動拉新玩家進 server.
 
 ## Findings — 待辦
 
+### F-stonedoor (石門事件 2026-06-02): 拆成 A(回合處理流程, 四拍已解) + B(generator 謎題品質, 待辦)
+
+**事件**: 玩家答謎語「何物無聲卻能言?」(正解「知識」)答「文字」, LLM narrate「石門開啟」(假 solve, 可能沒 emit solve_puzzle); 玩家「前往閱覽室」, ruleEnforcer 正確 reject move_player(閱覽室被 stone-door-lock 鎖、isSolved=false), 但 narration「你穿過石門來到閱覽室」照樣入 history → 下回合 LLM 讀到自己假話繼續演(snowball)。DB 實證 currentLocationId=reception-hall。chip 列「前往閱覽室」是對的(engine 認為還沒到), LLM 在說謊。prefill chip 再次當照妖鏡揪出 engine 穿透。
+
+**關鍵: 這 bug 混了兩個不同源的問題, 要分開看 ——**
+
+- **A (回合處理流程)**: LLM 演假成功、narration 領先 state、snowball。根: engine 把 narration 當 state 變更依據、而非反過來。同族 F-web-鎖門穿透 / F-web-假結局 —— 一個個修是打地鼠(修過鎖門穿透/假結局, 石門又用「假solve+假move」新組合穿透), 該根治。
+  **✅ 已解 (四拍重構 2026-06-02, 見已解區 F-turnloop-v2)**: 回合處理改「意圖→判定→敘述」四拍, narration 永遠在 state 定案後生, judge 三路判定 + acknowledgedOutcomes 交叉核查。假 move / 假 solve / snowball 從結構消除(殘留只剩「模糊暗示」細縫, prompt 壓 + 實玩抓)。
+
+- **B (generator 謎題品質)**: 那謎題本身是腦筋急轉彎(「何物無聲卻能言」答案發散: 知識/智慧/書/回音/文字...), 玩家答「文字」其實不算亂答, 是謎題太發散、答案不唯一。這跟 A 無關, 是 generator 生謎題的品質問題。**judge 再好救不了爛謎題** —— 謎題答案越發散, judge 越難判「對/近義/錯」(連正解都不唯一)。
+  **待辦**: generator prompt 要求謎題「答案明確、可從場景線索推出」, 避免腦筋急轉彎 / 答案發散的謎語。同族 F-spoil、謎題可解性(修1)、Phase 3 因果圖(謎題形式化、答案可驗證)。屬軸 B。
+
+**驗證啟示**: 「石門復現」很難測, 因為要同時湊齊 B(爛謎題)+ 模糊答案 + A(演成功)。但不需要復現石門來驗 A —— A 的驗證走「假 move 防守」(直接前往鎖房 → 看 narration 演不演穿越、currentLocationId 變不變、snowball 不 snowball, 不依賴謎題品質, 純戳四拍)+「judge 三路用答案明確的謎題測」(把謎題爛這變數拿掉、單驗 judge 準度)。
+
 ### F-visibility (NEXT UP, 最高優先, engine 架構級): 沒有 visibility 模型 / 物件全可見
 
 **現象**: engine 沒有「物件被發現了沒」的概念。Item schema 只有 id/name/description/locationId/isTakeable/isLocked/unlockItemId — 沒有 visible/hidden/discovered。物件結構完全平的 (generator prompt 明文「no sub-containers, items sit directly in location's itemIds」), 「便條在桌上」只能讓便條和桌子並列在同一 location 的 itemIds → 進房第一秒兩者同等可見、同等可 take。「查看桌子才發現便條」這層探索**從來不存在** — 「查看」在 engine 層不是動作, 只是丟給 LLM 生 narration, 不改 state、不 promote 任何物件。
@@ -236,6 +268,22 @@ puzzle.description 混了 visible clue + solution 推理過程。
 Player: 「識別卡要幹嘛凹凹凹凹」。生了 reward item 但沒 puzzle 用到 → 玩家拿了發現沒用。
 **註**: 「拿都拿不到」的底層 bug 已由 F-web-孤兒item 修掉 (雙重記錄)。剩「拿得到但沒用途」這層。
 修: validateScenarioLogic 加「reward item 必須有 puzzle 用到」檢查 (見下方基礎設施 TODO); puzzle hint 暗示需要哪個 item; (Tier 3) inventory item tap 顯示「為什麼撿的」。
+
+### F-reward-reveal (待辦, visibility 第二條揭露路徑, 依賴四拍 solve): reward item 解謎前就可見
+
+**現象 (實機 2026-06-02)**: 發電機謎題的獎勵「權限卡」, 玩家解謎(輸入數字)**之前**進房就在 chip 看到「查看權限卡」—— reward 在解謎前 top-level 可見, 提前洩漏「解謎有獎勵」(劇透)。解謎後 narration 才說「彈出權限卡」, 但卡早就看得到。
+
+**根因**: visibility 只做了一條揭露路徑 —— belongsTo 家具 + examine 才 reveal。但「reward 解謎後才出現」是另一條 —— 綁 puzzle + solve 才 reveal, **這條沒做**。所以 generator 把權限卡生成 top-level(belongsTo:null → 推導 hidden:false)→ 一進房可見。visibility 只做了一半(examine 揭露有、solve 揭露無), reward 掉進沒涵蓋的縫。
+
+**作者已定**: 要「解謎後才出現、解謎前完全看不到」(非「一直可見但鎖著」)。
+
+**方向 (架構級, 先說明再寫)**: 擴展 visibility 揭露來源。
+- schema: reward item 加獨立欄位 revealedByPuzzle: puzzleId (別混進 belongsTo —— belongsTo=examine 揭露、revealedByPuzzle=solve 揭露, 兩路分清)。
+- hidden 推導擴展: hidden = (belongsTo != null || revealedByPuzzle != null), 仍 deriveHiddenFields 推導、LLM 不填 hidden。
+- 揭露時機: 接四拍的 solve_puzzle apply 之後 —— judge solved → apply → promote 所有 revealedByPuzzle === 該 puzzleId 的 hidden items。
+- generator: reward 填 revealedByPuzzle 指向獎勵的 puzzle; validateScenarioLogic 驗該 puzzle 存在。
+
+**時機 (重要)**: 接在四拍的 solve apply 之後 → **依賴四拍 solve 流程是對的**。四拍剛上、solve(judge+apply)還沒實玩驗。**先驗四拍 solve 通, 再把 reward promote 接上去** —— 否則 reward promote 疊在未驗的 solve 上, 出錯難隔離。非阻斷(提前可見是劇透/體驗, 不擋通關), 排四拍驗穩後。同 F-orphan 是 reward 的兩面(F-orphan=沒用途、本條=提前可見)。
 
 ### F5 (待辦): drop item action type
 
