@@ -155,6 +155,29 @@ Player H 主動拉新玩家進 server.
 - **F-input + F2x** [Milestone 2 解]: 純文字 input friction → tap UI (場景物件/出口/背包 button) 解掉。80% turn 不用打字。F11 詭異動作 + 解謎答案仍用文字框 (常駐底部)。✅ 核心已解。
 - **F1b** [部分解]: reject narration 模糊「nothing happens」→ partial apply 後 narration 永遠保留 (不再全丟成 nothing happens) + reject log 加具體原因。但「玩家側」的明確 reject 訊息 (密碼錯 vs 系統 bug 區分) 仍可再強化。🔄 部分。
 
+### Phase 2 Milestone 4b 期間 (web, 2026-06-02)
+
+- **F-replay** [web, 已完成 — M4b-B / 缺口分析 A3]: 重玩這一局 — 打開 A 分享卡的人能親自玩 A 玩過的同一關 (同房間/物品/謎題), 自己玩自己的。詳細設計見 M4b-spec B 段; 以下記**實作落地與追蟲教訓**。
+  **架構 (定案)**: 不用 seed 確定性重生 (LLM 非確定性, 重生不會一樣); 存初始 WorldState JSON 快照 + 重載。
+  - 快照在 `generate()` 當下抓 (通關時 world_states 已是終局、撈不回初始)。
+  - 存兩處: `world_states.initialState` (generate 當下寫、turn 不覆寫) + `createShare` 時複製進 `shares.initialState`。**shares 是 append-only** (一 user 玩多次 = 多筆 share, 各帶自己那關的乾淨初始, 互不覆蓋) — 用 shareId 區分, 不存 world_states/user (會被 overwrite)。
+  - 重玩流程: `startReplay(shareId)` → 讀 share.initialState → patch sessionId 成 B 的 clerkUserId (純 LLM flavor, 非 DB key) → saveWorldState(B) → client `router.push('/play?replay=1')` → /play 的 useEffect 偵測 `?replay=1` → getCurrentState() 讀 B 的 world_states → toView → 進遊戲。
+  - **可傳遞**: B 通關也存自己的 initialState → B 的卡也能被重玩 → A→B→C 鏈。不在 URL 傳關卡資料 (只傳 shareId, server 撈)。
+  **三輪 bug (全靠加 log 抓 runtime 才定位, 非讀 code)**:
+  1. **登入 404**: `/sign-in` route 不存在 (Clerk 走 hosted UI), 改 `<SignInButton forceRedirectUrl>`。
+  2. **重玩「失敗」假象**: server action 裡 `redirect('/play')` 拋 NEXT_REDIRECT error, 從 client component event handler 呼叫時被 `catch` 攔下顯示「重玩失敗」, navigation 沒發生。改: server action 回傳 `{status:'ok'}`, client 自己 `router.push`。**教訓: Next.js redirect() 在 server action 裡是用「丟特殊 error」實作的, client try/catch 會誤殺。**
+  3. **重玩跳到開新場景**: /play 本來沒有「讀現有 world_states 進遊戲」的 on-mount 邏輯 (進頁就是從按鈕開始), startReplay 存了快照但 /play 沒讀。加 `?replay=1` useEffect → getCurrentState 載入。
+  **端到端驗過**: 電腦 + 手機 (無痕換帳號), A 通關分享 → B 載 A 那關乾淨初始 (turnCount 0) → B 自己玩通關 (同關 diverge: A 21 turns / B 14 turns) → B 卡也能再重玩。
+  **檔案**: schema.ts、drizzle/migrations/0003_*、sessionStore.ts、engine/index.ts、actions.ts、s/[shareId]/page.tsx、s/[shareId]/ReplayCTA.tsx。
+  **註**: production 與 local 共用同一 Neon DB (endpoint ep-snowy-meadow-aol7b1yb), migration 已 apply。
+
+- **F-mobile-viewport** [web 特有, 追蟲教訓重要]: 手機 (尤其 LINE in-app browser) 鍵盤 / iOS 系統 UI (靈動島、通話列) 出現時, 遊戲版面「跑掉」—— 整頁可橫向左右滑、canvas 右側露空白、捏按鈕被推出畫面切掉。
+  **根因**: canvas、輸入列、prefill chip、popup 的寬度都吃 **layout viewport** (402)。iOS 鍵盤 / 系統 UI 只壓縮 **visual viewport** (縮成 352)、**layout viewport 不變**。於是 402 寬的內容 > 352 可視區 → iOS 允許橫向捲動。**canvas 尺寸本身一直正常 (370 穩定), 問題是內容綁錯 viewport 來源。**
+  **修 (整頁綁 visual viewport)**: JS 監聽 visualViewport, 把 `visualViewport.width` 寫入 CSS 變數 `--vvw`; PlayPage wrapper + 所有內容寬度綁 `min(原 maxWidth, var(--vvw))`; canvas 偏移用 `--vvml` (margin-left) 修正 (原 `margin:0 auto` 是相對 layout viewport 402 置中, 在 352 可視區裡偏右); `body overflow-x:hidden` 當保險; 桌面 fallback (--vvw/--vvml 未設) 維持原 `margin:auto`/100%。✅
+  **追蟲教訓 (這隻躲了十幾版, 值得記)**: 現象「手機版面亂」與根因「內容綁 layout viewport」隔很遠。一路誤判: 先以為是讀回覆框 (sheet) 定位 → 改 bottom sheet → visualViewport 重定位 sheet → ResizeObserver 寬度過濾 → scrollTo 歸位 → 才靠**畫面 debug overlay 印出 innerW/clientW/vvW/containerW/canvas 各寬度**, 一眼看出 canvas (370) 沒壞、是整頁內容超出縮小的可視區。**未來類似症狀: 別從 sheet/canvas 開始追, 直接看「內容寬度綁的是 layout 還是 visual viewport」+ 用畫面 overlay 印實際值 (手機/in-app browser 不能開 DevTools)。** 同「prefill 當照妖鏡」「加 log 抓 runtime 而非讀 code」的方法論。
+  **跨裝置未驗 (重要)**: 整套修法只在 iPhone + LINE 驗過。其他 iPhone / Android / iPad / 各 in-app browser (IG/FB/Messenger) / 橫向**未驗證**, 且修法含寫死數字 (padding 16、容差) 是風險點。**主動傳播 (PTT/Reddit/HN) 前該系統性驗一輪** — 陌生人裝置雜, 歪掉直接傷第一印象/viral。
+  **連帶**: 手機旁白框改底部 sheet + 打字 (input focus) 時收起 (visualViewport 高度定位試過不穩, 改 focus 收起繞開 iOS 鍵盤坑); 剩餘 fit 見 F-mobile-fit。
+
 ---
 
 ## Findings — 待辦
@@ -178,6 +201,23 @@ Player H 主動拉新玩家進 server.
 Player A v2 38 turn 通關 ✅ 但沒主動截圖分享。Observer Y: 「需要視覺體驗」。當時 tap UI 通關只有「🎉 你通關了」文字, 沒分享卡。
 **已解 (M4a)**: LLM 生成中文金句卡 + server 防偽 + 短碼 `/s/{shareId}` + Open Graph 預覽, 已上線 (見設計文件第六部分)。
 **剩餘 / 後續**: F11 weird moments archive (卡片內容增量) 尚未做, 屬 M4b「卡片內容增量」+ C 版分享卡方向 (見 M4b-spec、分享卡C版)。
+**重玩 (M4b-B) 已完成**: 見已解區 F-replay (2026-06-02)。
+
+### F-resume (待辦, 軸 B, 低成本 — replay 基礎建設已到位): /play 無 resume, F5 掉出遊戲
+
+**現象**: /play 是純 client component, 遊戲狀態存 React state。F5 / 重整理 → state reset → started=false → 回到「開始新場景」按鈕。**world_states 在 DB 完好 (沒被破壞), 只是 UI 沒去讀它** — 是「缺少的功能」不是「讀壞」。手機切 app 回來、網路斷重整也會踩到。
+**為什麼低成本**: resume 需要的「讀 world_states → toView → 進遊戲」路徑, **F-replay 已經鋪好** (`?replay=1` 那條就是)。F5 掉局只是「沒帶信號去觸發它」。把 F5 也接上這條, resume 幾乎免費。
+**定位**: 軸 B (流失) — 玩到一半掉局是流失點, 但非阻斷 (能通關、能驗證)。非 next up (visibility 排前面)。
+**範圍待作者定**: (a) 接續邏輯 + 回覆內容 (history 在 DB, 從 history 重新生成滿地包子, 預設散落) — 低~中成本, 基礎建設已到位; (b) 連物理擺放都還原 (包子在哪、排成什麼樣) — 要額外持久化 canvas 座標 (現在不存), 成本高且與「滿地包子是當下玩的」設計有點衝突。作者傾向 (a) 範圍。
+
+### F-mobile-fit (待辦, 視覺/手機適配, 後續優化): 手機畫面 fit 一個螢幕
+
+**現象**: 手機直式下整頁可上下捲 (canvas + chip + input + 說明高度 > 可視高度), 且 canvas 上方有一塊空白 (canvas 固定寬高比, 塞進高螢幕填不滿, 上半是空天空、無內容)。作者要: 整頁 fit 一個畫面、不能上下捲。
+**已做**: canvas 橫向已全寬 (見下方 F-mobile-viewport)。
+**待做**:
+- **縱向收掉上方空天空**: canvas 上半無內容, 減少上方天空顯示高度、讓貓+地面上移填滿可視區, 整頁塞進可視高度。不壓縮變形、不動場景構圖、不丟內容 (那塊本來就空)。是高度版的「綁 visualViewport.height」, 對稱於已解決的寬度版 --vvw。
+- **輸入列 + chip 保留 padding** (不貼齊螢幕邊, 按鈕緊貼邊難按); canvas 全寬、輸入列/chip 留邊, 分開處理。
+**注意**: 做時小心別跟已完成的寬度版 --vvw 約束打架 (viewport 同類, 這隻蟲橫跨十幾版, 容易連環追)。
 
 ### F2y (待辦): puzzle clue 隱藏在 location object 內
 
@@ -260,6 +300,11 @@ repairItemConsistency 的 console.warn 會持續報「LLM 每場漏幾個雙向�
 ### F16: Multi-hop movement
 - Tier 1: Turn Handler narrate 中間經過, state 一次 1 hop
 - Tier 2: Rule Enforcer 支援 multi-hop chain
+
+### 小尾巴 (replay 收尾遺留, 輕)
+- **重玩載入文字 misleading**: 重玩進 /play 時短暫顯示「🔮 謎題生成中…(約 30–60 秒)」, 但重玩其實是毫秒級 DB 讀取 (載快照, 沒在生成)。會讓 B 以為在等生成。改: 加獨立 loadingReplay 狀態顯示「載入這一關…」之類。
+- **ReplayCTA 兩按鈕大小不一**: 「挑戰 EscapeBot →」比「重玩這一關」大 (寬高不一致)。純 CSS 對齊。
+- **offset 族一次性盤點**: 「拿 sprite.x/y 當包子位置、漏視覺中心偏移」已出現過多條路徑 (M3 修過點選/描邊/落地, prefill 後又揪兩條)。grep 所有 sprite.x/y 用法, 一次盤完防第 N 條。
 
 ---
 
@@ -359,3 +404,10 @@ Safety net: Google AI Studio $30/月 hard cap
 - 即使 gemini-2.5-pro, 系統性會漏雙向登記 / 放錯 puzzle 位置 / 漏填 union optional 欄位
 - 解法: 生成後過 repairItemConsistency (自動修補) + validateScenarioLogic (真死鎖才 retry)
 - 原則: LLM 輸出不是最終 state, 要程式驗證/修補層
+
+#### iOS / in-app browser 的 viewport 行為 (見 F-mobile-viewport)
+- **layout viewport (clientWidth) vs visual viewport (visualViewport.width) 是兩回事**: iOS 鍵盤 / 系統 UI (靈動島、通話列) 只壓縮 visual viewport, layout viewport 不變。CSS 的 `%` / `100vw` / `window.innerWidth` 各自吃哪個要分清。
+- canvas / 內容若綁 layout viewport, 可視區被壓縮時內容會超出 → 橫向可滑。要綁 visual viewport (JS 寫進 CSS 變數) 才跟得上。
+- **LINE / IG / FB 等 in-app browser 的 viewport 行為非標準**, 不能只在一個環境調對就當全平台 OK。
+- **手機 / in-app browser 不能開 DevTools** → 用畫面 debug overlay 印實際值 (innerW/clientW/vvW/容器寬/canvas 寬) 來定位, 比讀 code 推斷快得多。
+- **Clerk dev key**: 目前 production 仍用 development keys (console 會警告 strict usage limits)。**上線 / 主動傳播前要換 production key。**
