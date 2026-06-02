@@ -193,8 +193,9 @@ Web 版沒有把 Discord 版直接「加上圖形介面」，而是**根本性�
 - （描邊偏移、落地包子浮空——已修）
 
 **內容品質（較關鍵）**
-- **engine 沒有 visibility 模型(next up,最高優先)**：所有物件進房第一秒全可見、全可 take,沒有「未發現」概念,「查看桌子才發現便條」這層探索從來不存在(只靠 LLM prompt 軟性把關)。prefill 查看 chip 把這缺陷無法繞過地攤出來。要補 state 結構(Item 加 hidden/revealedByAction、查看變真動作、依 visibility 篩),同時是「逐步發現」這個遊戲性的基礎。架構級,已提為下一個動工項。
-- 謎題可解性問題：LLM 生成的謎題有時線索不足以推出答案，玩家卡關。已先做止血（限制 LLM 提示只能用遊戲內資訊，不能腦補現實知識），但根本的「生成時保證可解」尚未做。
+- **engine visibility 模型 — ✅ 已完成(2026-06-02)**：原本所有物件進房全可見、無「未發現」概念。已補:Item 加 hidden + belongsTo,hidden 由 belongsTo 推導(LLM 只填 belongsTo);examine 家具 promote hidden children;toView/context 依 visibility 篩。是「逐步發現」遊戲性的基礎。(實作見 BACKLOG F-visibility。待補:reward item 的 solve 揭露,見 F-reward-reveal。)
+- **回合處理四拍重構 — ✅ 已完成(2026-06-02)**：原本 narration 與 stateChange 同一 LLM call 生,stateChange 被 reject 後 narration 照演 → LLM 演假成功(假 solve/假 move)、污染 history、snowball(石門事件)。已改「意圖→判定→敘述」四拍,narration 永遠在 state 定案後生,solve 走獨立 judge(verdict 三路)。**是 Phase 3 因果圖「判定結構化/可驗證」那一面的前身。**(見 BACKLOG F-turnloop-v2、F-stonedoor。)
+- 謎題可解性問題：LLM 生成的謎題有時線索不足以推出答案，玩家卡關。已先做止血（限制 LLM 提示只能用遊戲內資訊，不能腦補現實知識），但根本的「生成時保證可解」尚未做。**另:謎題答案發散(腦筋急轉彎)讓 judge 難判、玩家答合理答案被判錯=唬爛感,待 generator prompt 改(軸 B 排序中,見缺口分析)。**
 - 其他關卡品質：線索過度暴露（劇透）、容器/物品鎖機制、物品重複顯示、謎題位數描述不符、資料庫連線中斷無重試等。
 
 ---
@@ -223,13 +224,16 @@ Phase 3：因果圖當底層   — 未來（改底層邏輯模型本身）
 
 所有項目的共同點：改呈現/互動，不動底層邏輯。
 
-**已完成**：餵貓循環、防偽分享卡（見第六部分）、LLM 提前處理（捏包子瞬間背景處理、暫存命中時取用，把操作時間拿來掩護 LLM 延遲；已實玩驗過）、輸入建議 prefill chip（依場景物品/出口/背包生成「查看/前往/使用」chip，只填輸入框不直接執行、保留捏包子餵貓；已實玩驗過。⚠️ 帶已知缺陷:見下「下一波」第 1 項）、**重玩這一局（M4b-B / A3，分享連結變進入點、可傳遞 A→B→C；端到端驗過）**、**手機適配（旁白底部 sheet、整頁綁 visual viewport 解 iOS 鍵盤溢出；跨裝置未驗）**
+**已完成**：餵貓循環、防偽分享卡（見第六部分）、LLM 提前處理（捏包子瞬間背景處理、暫存命中時取用，把操作時間拿來掩護 LLM 延遲；已實玩驗過）、輸入建議 prefill chip（依場景物品/出口/背包生成「查看/前往/使用」chip，只填輸入框不直接執行、保留捏包子餵貓；已實玩驗過）、**重玩這一局（M4b-B / A3，分享連結變進入點、可傳遞 A→B→C；端到端驗過）**、**手機適配（旁白底部 sheet、整頁綁 visual viewport 解 iOS 鍵盤溢出；跨裝置未驗）**、**engine visibility 模型（hidden 從 belongsTo 推導、examine 揭露;見 BACKLOG F-visibility）**、**回合處理四拍重構（意圖→判定→敘述,根治假成功/snowball,solve 走 judge 三路;實玩驗過石門兩半;見 F-turnloop-v2）**
 
-**下一波（next up，最高優先）**：
-1. **engine visibility 模型 / 逐步揭露**：目前 engine 沒有「物件被發現了沒」的概念——所有物件進房第一秒全可見、全可 take,「查看桌子才發現便條」這層探索從來不存在,只靠 LLM prompt 軟性把關。prefill 的查看 chip 把這缺陷無法繞過地攤出來(直接列出未發現物件)。要補的是 state 結構(Item 加 hidden/revealedByAction、「查看」變成會 promote 物件的真動作、視覺與 LLM context 依 visibility 篩)。這同時是「逐步發現/探索層次」這個遊戲性的基礎(目前完全沒有),不只是修 bug。架構級。同「鎖門穿透」「孤兒物品」那族:LLM 軟性把關 → 該補 state 欄位。
+**下一波（next up，軸 B 順序,作者拍板 2026-06-02）**：
+1. **reward 揭露**：reward item 綁 puzzle、solve 後才揭露（visibility 第二條路徑,接四拍 solve）。順手收尾 visibility。見 BACKLOG F-reward-reveal。
+2. **B2 遊戲理解**：開場引導接上「捏包子餵貓=跟 LLM 對話」隱喻——有真實玩家證據（老玩家反覆卡「貓吃包子為啥推進度、邏輯呢」）。不太動 engine,軸 A 軸 B 雙收。
+3. **generator 謎題品質**：要求謎題答案明確、可從線索推出,避免腦筋急轉彎/答案發散（讓玩家答合理答案被判錯=唬爛感,且讓四拍 judge 有用武之地）。石門事件 B 半。
+4. **F-resume**：F5/重整理掉局接續（replay 基礎建設已到位,低成本）。
 
 **下一個大方向（升級）**：
-2. **建築平面圖 + 空間移動**：用建築平面圖風格呈現房間配置，常駐小地圖 + 鍵盤快捷鍵叫出可點的地點選單，點地點即移動。讓「移動」從打字變成看著空間圖點選——移動這個高頻操作變直覺，空間關係一目了然。（= 舊的按鈕介面升級成空間化的移動工具）
+- **建築平面圖 + 空間移動**：用建築平面圖風格呈現房間配置，常駐小地圖 + 鍵盤快捷鍵叫出可點的地點選單，點地點即移動。讓「移動」從打字變成看著空間圖點選——移動這個高頻操作變直覺，空間關係一目了然。（= 舊的按鈕介面升級成空間化的移動工具）
 
 **後續增強**：
 - 包子分類視覺（黃金包=線索 / 腐爛包=weird moment）
