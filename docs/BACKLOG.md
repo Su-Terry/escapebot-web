@@ -1,47 +1,89 @@
-# EscapeBot Backlog
+# Cat Got Your Words — Backlog
+
+> 對外正式英文名 **Cat Got Your Words**(已定)。`EscapeBot`=舊代號/Discord 版名、`escapebot-web`=GitHub repo 名,沿用為檔名/技術識別字,非產品名。中文對外名未定。
 
 ## 本檔職責 / 整體進度
 
 > **整體進度（Phase / Milestone 哪些已 ship、下一個做什麼）以「EscapeBot-設計文件」為單一真相源**（該檔的「📊 專案狀態 / Gate」+ 第六部分「目前進度」）。本檔**不再複述 milestone 進度**——以前在這裡維護一份, 必然跟設計文件漂移（曾停在「M3 是 Next」整整落後兩個 milestone）。
 >
-> 本檔只管 BACKLOG 本職:engine/generator 的 findings 與 bug（已解 / 待辦）、累積的方法論 insight、chain mode、cost、deploy 教訓。要看「現在做到哪、下一個做什麼」請看設計文件。
+> 本檔只管 BACKLOG 本職:engine/generator 的 findings 與 bug（已解 / 待辦）、累積的方法論 insight、cost、deploy 教訓。要看「現在做到哪、下一個做什麼」請看設計文件;chain mode 設計也已移設計文件。
 
 - **Collaborator**: 已邀請一位 frontend co-designer 加入 (equal-status, 負責 Phase 2 視覺/前端)。走 B 路徑邀請 (拿能順暢通關的 working prototype 邀, 非 spec)。
+
+### 📇 待辦索引 (找條目從這裡; 已解的看「Findings — 已解決」區 + 核心 insight)
+
+**進行中 (active)**
+| 條目 | 一句話 | 狀態 | 在哪 |
+|------|--------|------|------|
+| 3a 驗證 | 因果圖 3a 實玩驗證→修→merge | ⚠️ 未完成, 交接中 | 待辦區「3a 驗證進度 + 邊界盤點」 |
+| F-stonedoor B | generator 謎題品質 (止血完成, 根治走 Phase 3) | 止血✅ / 3a 進行中 | 待辦區 F-stonedoor |
+
+**待辦 (排隊中)**
+| 條目 | 一句話 | 定位 | 在哪 |
+|------|--------|------|------|
+| F-visibility | 生成 belongsTo 比例待多場實測 | 🔄 partial | 待辦區 |
+| F-reward-reveal | reward 解謎前就可見 (solve 揭露路徑未做) | 軸 B, 依賴四拍 solve 驗穩 | 待辦區 |
+| F-resume | F5/重整理掉局, 無 resume | 軸 B, 低成本 (replay 路鋪好) | 待辦區 |
+| F-idle-hint | 捏了沒射出 → 不打擾提示 | 軸 B 引導, 低成本 | 待辦區 |
+| F-mobile-fit | 手機縱向 fit 一個螢幕 | 視覺/手機, 後續優化 | 待辦區 |
+| F2y | clue 藏 location object, 看四周不講 | generator | 待辦區 |
+| F-spoil | narration 把 solution 講太直接 | generator | 待辦區 |
+| F-orphan | reward 沒 puzzle 用到 (防線待補) | generator 驗證層 | 待辦區 |
+| F5 | drop item action type | engine 小 | 待辦區 |
+| F-web-combo | solution 只支援單一 StringMatch | engine 限制, 之後修 | 待辦區 |
+| chain mode | schema + first product + UI/endgame | 設計見設計文件 | 「chain mode 工程待辦」 |
+| validateScenarioLogic 擴充 | 孤兒 reward / win 可達 / 線索缺失 / 連通性 | 基礎設施, 持續 | 「關鍵基礎設施 TODO」 |
+| F9 / F11 T2,T3 / F13 / F16 / 小尾巴 | puzzle variety / personality / streak / weird metric / multi-hop / replay 小尾巴 | post-M4 增強 | 「Backlog (Phase 2 post-M4)」 |
+| F-theme / F3 / F4 / F7 / F8 / F14 | theme / 線索持久化 / 救援 / 風味動作 / 兩層 enforcer / 非線性 chain | Phase 3 後 | 「Backlog (Phase 3)」 |
+
+**待拍板 (非 bug)**
+| 條目 | 一句話 | 在哪 |
+|------|--------|------|
+| Q-埋貓 | 「滿地包子埋住貓」畫面要不要成立 (牽動分享卡 C 版前提) | 「開放設計問題」 |
+| 3a merge 決策 | main 止血版見人 vs 3a branch 整批 merge | 3a 交接段 |
 
 ---
 
 ## 核心 insight (累積的方法論)
 
-### 1. Tap UI 是照妖鏡 (2026-05-27, 方法論層級)
+> 這幾條是跨多個 bug 反覆出現的大教訓,提到最前當索引。個別 bug 專屬的追蟲細節(redirect 坑、viewport 追蟲史等)留在各自條目、不抽走 —— 教訓離開現場會變空話。
 
-純文字 Discord 版的 narration 會蓋住所有「LLM 嘴上演的事 vs state 真實發生的事」的落差。
-玩家只看文字, 文字說拿到了就以為拿到了, 沒有 UI 揭穿。
+### 1. 照妖鏡:明確 UI 揭穿隱形 state 落差
 
-Tap UI 把 state 攤在 button 上 (背包有沒有那個 item / 出口鎖沒鎖), 每個落差立刻現形。
+純文字 narration 蓋住所有「LLM 嘴上演的事 vs state 真實發生的事」的落差 —— 文字說拿到了就以為拿到了, 沒有 UI 揭穿。**Tap UI / prefill chip 把 state 攤在按鈕上**(背包有沒有那 item / 出口鎖沒鎖 / 該物件發現了沒), 每個落差立刻現形。
 
-**重要推論**: Milestone 2 修的 bug 大多不是 web 新 bug, 是 Discord 版一直存在但隱形的 engine/generator 缺陷。
-- 兩版共用同一套 engine model (locations/items/puzzles), 這些修復**對 Discord 版也適用**。
-- Discord 版那 ~5 個 user 很可能玩在一個有隱形瑕疵的版本 (偶爾拿不到東西 / 穿過假鎖, 被純文字蓋住, 玩家沒抱怨可能只是剛好沒卡到通關必須的物件)。
-- → TODO: 查 Discord player log 有沒有 take_item / move_player reject 記錄, 驗證隱形瑕疵規模。
+**反面根因(被照妖鏡揪出的那個東西)**: **LLM 軟性把關擋不住明確 UI / state 缺欄位** —— 鎖純靠 LLM「沒解就別 emit move」軟把關、物件全可見靠 prompt「別揭未發現物」、item 兩處記錄只更新一個, tap/chip 的明確指令一逼就穿。解法一律是補 state 結構: 鎖該有 lockedByPuzzleIds、物件該有 hidden/belongsTo、item 該有單一權威來源。
 
-### 2. validateScenarioLogic + repairItemConsistency = 可解性保證層 (可能是技術壁壘)
+**重要推論**: M2 修的 bug 大多不是 web 新 bug, 是 Discord 版一直隱形的 engine/generator 缺陷(兩版共用 engine model, 修復對 Discord 也適用; 那 ~5 個 user 很可能玩在有隱形瑕疵的版本)。
 
-「LLM 生成關卡, 但保證可玩」這件事, 沒有自動機制保證時, LLM 會生出死鎖 / 孤兒 reward / 無解 puzzle / 內部不一致。
-這輪意外長出兩個東西構成第一道防線:
-- `validateScenarioLogic()`: 生成時偵測無法自動修補的真死鎖 → retry 重生
-- `repairItemConsistency()`: 生成時自動修補可修復的不一致 (item 雙向登記) → 不重生
+體現在: F-web-鎖門穿透、F-web-孤兒item、F-visibility、F-stonedoor。
 
-哲學: **LLM 生成的結構不被信任為最終 state**, 先過一層程式檢查 —
-- 能自動修補的 → 程式補
-- 不能修補的真死鎖 → retry
-- 設計上盡量把問題歸到「可自動修補」類, 減少昂貴的整場景重生
+### 2. LLM 輸出不被信任為最終 state
 
-這是「LLM 當 amplifier、state machine 當基石」哲學的具體落地, 且**可能是這類遊戲的核心技術壁壘**。
+LLM 生成需要內部一致性的結構化資料時, 不管 prompt 怎麼教(即使 gemini-2.5-pro)系統性會漏雙向登記、放錯 puzzle 位置、漏填 union optional 欄位。**不該奢望 prompt 教會, 要靠程式事後驗證/修補。** 兩層落地:
 
-### 3. LLM 生成需要內部一致性的結構化資料時, 總會漏某些約束
+- **生成層**: `validateScenarioLogic()` 偵測無法自動修補的真死鎖 → retry 重生; `repairItemConsistency()` 自動修補可修復的不一致(item 雙向登記)→ 不重生。原則: 能自動修的程式補、真死鎖才 retry、設計上盡量把問題歸到「可自動修補」類(對「可修補小瑕疵」用「整場景重生」是錯手段, 見 F-web-生成太久)。這是「LLM 當 amplifier、state machine 當基石」的具體落地, **可能是這類遊戲的核心技術壁壘**。
+- **回合處理層**: narration 永遠在 state 定案後生(四拍:意圖→判定→敘述), 不讓 narration 領先 state、演假成功、snowball。
 
-不管 prompt 怎麼教 (即使 gemini-2.5-pro), LLM 系統性地會漏雙向登記、放錯 puzzle 位置、漏填 union optional 欄位。
-結論: 不該奢望 prompt 教會, 要靠程式事後修補 / 驗證, 不信任 LLM 輸出為最終 state。
+體現在: validateScenarioLogic/repairItemConsistency、F-turnloop-v2、F-stonedoor A。
+
+### 3. 加 log 抓 runtime, 別讀 code 推測根因
+
+查 bug 根因要憑**真實 prompt / log / diff**, 不靠讀 code 腦補。「讀 code 推測出的根因」反覆栽過(examine 連續誤判三套、replay 三輪 bug、viewport 躲十幾版)。手機 / in-app browser **不能開 DevTools** → 用畫面 debug overlay 印實際值(各 viewport 寬度等), 比讀 code 推斷快得多。
+
+體現在: F-replay(三輪 bug 全靠加 log 抓)、F-mobile-viewport(overlay 印 viewport 寬才定位)、3a 驗證交接段(examine 誤判三套)。
+
+### 4. dump 壓測 ≠ 實玩
+
+謎題品質的真證明是**實玩解到通關**, 非看 dump。dump 看著乾淨會**低估**問題 —— 淺、邏輯不通(向日葵比月光亮)、format hint 缺數量格式、假線索物件多, 這些 dump 驗不到、實玩才現。「邏輯不通」是最常犯的錯之一、不是偶發。
+
+體現在: E 段(壓測→實玩翻案)、3a 實玩驗證兩場。
+
+### 5. 作者實機事實 > code 推測
+
+哪一版 work / 壞, 以**作者實玩陳述為準**, 不被 code 推測推翻。3a 範圍、examine 哪壞都是作者實機事實先於 code 推測校正過的。
+
+體現在: 3a 驗證交接段(交接注意)。
 
 ---
 
@@ -97,32 +139,11 @@ Phase 1 老玩家 (Player S) 主動回流玩 Phase 2 大改版 (餵貓 + 3D)。*
 - 「需要 GUI / 視覺體驗」
 - 玩家通關當下期望 engagement upgrade
 
-### Design (proposed)
+### chain mode 工程待辦
 
-- Room 1 通關 → 結局頁面「進入下一章」button (player-controlled)
-- Room 2 scenario gen 接受 room 1 summary as context
-- Inventory carry: hybrid (universal items carry, room-specific reset)
-- Finite chain: 5-7 chambers per chain product
-- 第一個 chain product: TBD (Spaceship Trilogy / Alchemist Tower / 偵探推理)
-
-### Engineering plan
-
-> web 基礎建設與 M1–M4a（web foundation、餵貓循環、分享卡等）的進度見設計文件,不在此複述。chain mode 本身的規劃:
+> chain mode 的設計(proposed design / strategic value / open questions)已移入設計文件「chain 模式」小節,不在此複述。BACKLOG 只追蹤工程待辦:
 - chain mode schema + first chain product
 - chain mode UI + endgame design
-
-### Strategic value
-
-- Niche deepening: LLM + escape room + finite chain = no direct competitor
-- "值得分享" leverage: "我玩到第 N 章了" status signal
-- Natural retention without violating success metric
-- AI Dungeon 有 endless mode 但無 genre, EscapeBot 提供 structured chain
-
-### Open questions
-
-- Inventory carry hybrid 的具體 rules
-- 不同 chain products 之間切換 (mid-chain abort 怎麼處理?)
-- Endgame 設計: 每 chain 最後 chamber 該怎麼 narrate "saga ends" without anticlimax?
 
 ---
 
@@ -130,36 +151,25 @@ Phase 1 老玩家 (Player S) 主動回流玩 Phase 2 大改版 (餵貓 + 3D)。*
 
 ### Phase 2 回合處理重構 (web, 2026-06-02)
 
-- **F-turnloop-v2** [engine 架構級, 根治一族 coupled 問題]: 回合處理改「意圖→判定→敘述」四拍, 根治「narration 領先 state、演假成功、snowball」這一整族(鎖門穿透 / 假結局 / 假 solve / 假 move / 石門事件 F-stonedoor 的 A)。
-  **根**: 舊架構 narration + stateChange 由同一 LLM call 一起生, stateChange 被 reject 後 narration 照樣入 history → LLM 下回合讀自己假話繼續演。一個個修是打地鼠(修過鎖門穿透/假結局, 石門又用新組合穿透)。
-  **四拍 (定案)**:
-  - Phase 1 Intent: extractIntent() — LLM 只輸出 stateChanges JSON, 不寫 narration。
-  - Phase 2 Judge: engine 規則判 move/take/use/examine; solve_puzzle 走獨立 LLM judge(judge.ts judgeAnswer)→ Verdict {solved/ambiguous/wrong}, 區別 similarity(等價可接受)/ ambiguity(模糊→澄清反問, 不算錯)/ wrong。judge 只分類、不碰 state、不寫 narration; 2 retry 後 safe default = ambiguous(不冤判對/錯)。
-  - Phase 3 Apply: engine 唯一改 state 處(examine 的 hidden children 在此 flip)。
-  - Phase 4 Narrate: generateNarration() — LLM 拿已定的 newState + appliedChanges + verdicts 寫 narration, 永遠跟 state 一致。輸出帶 acknowledgedOutcomes(申報 narration 對應哪些事件), engine 交叉核查 applied/rejectedChanges, 不一致 → retry 1 次 → 仍不一致走 buildFallbackNarration(deterministic、不呼叫 LLM、不可能矛盾)。
-  - finalizeTurn(): 收尾 win check + turnCount++ + history.push, 不動遊戲物件。
-  **吸收 / 刪除**: visibility 三補丁(prePromoteExamine/detectExamineTarget/promoteHiddenChildren)刪除 —— examine 走四拍(Phase 3 promote 在 Phase 4 narrate 前), 時序問題從根消失。wrong-solution retry 刪除(被 judge+narrate 取代)。recoverPuzzleIds 保留 Phase1→2。processTurn 外部 signature 不變(replay/resume 透明、舊存檔相容)。
-  **殘留細縫 (已知、不宣稱杜絕)**: Phase 4 narration 仍是自由 prose, 無 zero-LLM 完全結構防線。acknowledgedOutcomes 能抓「顯性假成功」(演了沒發生的事件), 但抓不到「模糊暗示」(門縫好像動了一下 —— 語意不算謊但可能誤導)。傷害遠小於石門(不污染 state、不 snowball, 因 state 已是真相), prompt 壓 + 實玩抓。比舊架構是質變: 石門那種結構性必然 → 偶爾措辭偏離。
-  **latency**: 一般動作 2 call(intent+narrate, ~1.5x)、解謎 3 call(intent+judge+narrate)。judge/intent 輸出小、快; 用「Phase1+2 在捏包子前背景跑 + Phase4 貓咀嚼掩護」吸收。
-  **實玩驗過 (2026-06-02)**: ✅ 假 solve(答 0000 →「沒反應、不正確」, 不演成功) ✅ 假 move(前往鎖著的種子庫 →「紋絲不動、鎖著」, 不穿越、currentLocationId 不變) ✅ solved + 語意正規化(答「73一九」→ judge 認出 = 7319 判 solved, 證明非死字串比) ✅ examine 空物件誠實(查看發電機「沒發現其他細節」) ✅ 正常一局通關。**石門 bug 兩半(假 solve + 假 move)都不再發生。** 待驗: ambiguous 反問(要語意謎題才測得到, 數字謎測不出)、latency 手感長期觀察。
-  **檔案**: types.ts(Verdict/NarrationResult)、judge.ts(新)、turnHandler.ts(extractIntent/generateNarration/buildFallbackNarration, 舊 handleTurn 保留不呼叫)、ruleEnforcer.ts(finalizeTurn)、index.ts(processTurn 全換、刪三補丁+retry)。
+- **F-turnloop-v2** [engine 架構級, 根治一族 coupled 問題]: 回合處理改「意圖→判定→敘述」四拍, 根治「narration 領先 state、演假成功、snowball」一整族(鎖門穿透/假結局/假 solve/假 move/石門 A)。
+  **根**: 舊架構 narration + stateChange 同一 LLM call 生, stateChange 被 reject 後 narration 照樣入 history → LLM 下回合讀自己假話繼續演。一個個修是打地鼠。
+  **四拍**: ① Intent — LLM 只出 stateChanges JSON; ② Judge — engine 規則判 move/take/use/examine, solve 走獨立 LLM judge(judge.ts, Verdict 三路 solved/ambiguous/wrong, 不碰 state, retry 後 safe default=ambiguous 不冤判); ③ Apply — engine 唯一改 state 處; ④ Narrate — LLM 拿已定 state 寫 narration, acknowledgedOutcomes 交叉核查, 不一致 retry → 仍不一致走 deterministic fallback(buildFallbackNarration, 不可能矛盾)。
+  **吸收**: visibility 三補丁 + wrong-solution retry 刪除(時序問題從根消失)。processTurn 外部 signature 不變(replay/resume 透明、舊存檔相容)。
+  **殘留細縫(已知、不宣稱杜絕)**: Phase 4 仍是自由 prose, acknowledgedOutcomes 抓得到顯性假成功、抓不到「模糊暗示」(門縫好像動了)。傷害遠小於石門(state 已是真相、不 snowball), prompt 壓 + 實玩抓。質變: 結構性必然 → 偶爾措辭偏離。
+  **實玩驗過(2026-06-02)**: 假 solve/假 move/語意正規化(「73一九」判 solved, 非死字串比)/examine 誠實/通關, **石門兩半都不再發生**。待驗: ambiguous 反問(要語意謎題才測得到)、latency 長期手感。
+  **檔案**: types.ts、judge.ts(新)、turnHandler.ts、ruleEnforcer.ts、index.ts。
 
 - **F-visibility** [engine, 已實作 — 部分流程被 F-turnloop-v2 吸收]: 逐步揭露機制 —— Item 加 hidden + belongsTo, hidden 由 deriveHiddenFields 從 belongsTo 推導(LLM 只填 belongsTo、不填 hidden, 從結構杜絕不一致, 電腦這種 top-level 鎖住物件 belongsTo:null → hidden:false 自動可見)。examine 家具 promote 其 hidden children。toView/safeContext 依 visibility 篩。deriveHiddenFields 只在 generateScenario 跑、load/replay 不重推導(examine 過的值保留、replay 載 initialState 全藏從頭探索)。**註**: 原本的 examine 時序補丁(prePromoteExamine 等)已被 F-turnloop-v2 四拍吸收刪除。**待補**: reward item 的「solve 揭露」這條路徑(見待辦 F-reward-reveal); generator 生 belongsTo 的比例待多玩觀察。
   **實機驗證 (2026-06-02)**: generator 確實生 belongsTo、examine 揭露真的跑 —— 實玩「掀開金屬床鋪 → 枕頭底下藏著一張磨損的照片」(照片原 hidden、belongsTo 綁床鋪、查看才 promote 成 visible)。**visibility 非空殼、generator 會生 belongsTo、examine reveal 接四拍通**。這回答了「generator 生不生 belongsTo / visibility 真用還空殼」這個一直掛著的待驗(= reward 揭露的前提)。**仍待**: 生得夠不夠、穩不穩(比例)仍待多場累積,單場只證「會生、真用」。
 
-- **F-intent-boundary** [engine, 2026-06-02]: 建立「貓轉達 / 世界(judge)判定 / 玩家推理」三者分工邊界, 修「問一句就破關」+ 廢 F-hint。
-  **問題**: intent 抽取把「詢問答案對不對」誤判成「提交」。最嚴重「7319 是正確的嗎?」抽出 attemptedSolution=7319 → 直接 judge → 判 solved → **玩家問一句就破關**。
+- **F-intent-boundary** [engine, 2026-06-02]: 建立「貓轉達 / 世界(judge)判定 / 玩家推理」分工邊界, 修「問一句就破關」+ 廢 F-hint。
+  **問題**: intent 抽取把「詢問答案對不對」誤判成「提交」——「7319 是正確的嗎?」直接進 judge 判 solved, **玩家問一句就破關**。
   **核心原則**: 貓不知道答案(那是世界的事)、不評判、不提示、不幫推理; 玩家負責推理; 卡住靠謎題本身可推(generator), 不靠貓補救。
-  **四類分流 (INTENT_SYSTEM_PROMPT + NARRATION_SYSTEM_PROMPT)**:
-  - 類型1a 詢問帶候選(X對嗎 / X行不行 / 覺得是X): intent 判 [], 不進 judge。判不準偏詢問側(靠 LLM 語意, 非硬關鍵詞 —— 列表外「行不行」也偏對)。貓「我不知道它要不要, 要試把 X 捏包子給我去問」(引導提交、不 Yes/No 確認、不評判)。
-  - 類型1b 求助(怎麼解 / 給線索 / 卡住了): intent []。貓「我不知道它要什麼, 推敲是你的事, 把想試的捏包子給我」—— **不給方向**(廢 F-hint 的「往答案推一把」)。
-  - 類型2 提交/操作(提交X / 你幫我提交X / 開門 / 拿鑰匙): 正常 intent→judge→apply→narrate。「你/幫我」前綴不影響。attemptedSolution 加提取範例(剝動詞前綴)穩定填、不再老靠 backfill。
-  - 類型3 對貓本人(冬眠 / 走開): intent [], 純 persona 回應、繞回職責(我得守著/收包子)、不複述玩家原句。
-  **結構保證**: 類型1 不進 judge → 貓 narrate 拿不到 verdict → 結構上無法評判答案, 只能說「我不知道」(persona + engine 雙重, 非只靠 prompt)。
-  **清理**: 移除 NARRATION_SYSTEM_PROMPT 殘留的「提示請求」兩行(與 persona 不提示矛盾); 刪四拍重構後的死碼(handleTurn / SYSTEM_PROMPT / backfillSolution)。
-  **實玩驗過**: 四類雙向 —— 詢問擋(7319對嗎/25-13行不行不破關、引導提交)、提交過(提交7319 正常 judge wrong、未被矯枉成詢問)、求助不給方向(「你推敲好了把想試的捏包子給我」)、對貓本人繞職責(「我哪都不去, 你還在這裡呢」)。貓味全程在、鞏固隱喻(B2)。
-  **residual (非阻塞, 記錄)**: 「你幫我提交X」attemptedSolution 偶爾仍 null 靠 backfill 整句給 judge(judge 能解析, 不理想 —— 等於 judge 做意圖解析); 「貓,把答案設成X」逗號偶讓 LLM 抽兩個 solve(打同謎題, 第二個被 isSolved reject、不雙判)。極邊緣, 留觀。
-  **檔案**: turnHandler.ts(INTENT/NARRATION_SYSTEM_PROMPT 改、刪 handleTurn/SYSTEM_PROMPT/backfillSolution)。
+  **四類分流**: ①a 詢問帶候選(X對嗎/X行不行)→ intent [], 不進 judge, 貓「我不知道, 要試把 X 捏包子給我」(判不準偏詢問側, 靠 LLM 語意非硬關鍵詞); ①b 求助(給線索/卡住)→ 貓不給方向「推敲是你的事」(廢 F-hint); ② 提交/操作 → 正常 judge(「你/幫我」前綴不影響, attemptedSolution 加提取範例穩定填); ③ 對貓本人 → persona 回應繞回職責、不複述原句。
+  **結構保證**: 類型① 不進 judge → 貓拿不到 verdict → 結構上無法評判答案, 只能說「我不知道」(engine + persona 雙重, 非只靠 prompt)。
+  **實玩驗過**: 四類雙向(詢問擋不破關、提交正常過、求助不給方向、對貓繞職責), 貓味全程在、鞏固隱喻(B2)。
+  **residual (極邊緣, 留觀)**: 「幫我提交X」偶爾 attemptedSolution null 靠 backfill 整句給 judge(judge 能解析, 不理想); 逗號句偶抽兩個 solve(第二個被 isSolved reject、不雙判)。
+  **檔案**: turnHandler.ts(INTENT/NARRATION_SYSTEM_PROMPT 改、刪 handleTurn/SYSTEM_PROMPT/backfillSolution 死碼)。
 
 
 
@@ -206,7 +216,7 @@ Phase 1 老玩家 (Player S) 主動回流玩 Phase 2 大改版 (餵貓 + 3D)。*
   - 存兩處: `world_states.initialState` (generate 當下寫、turn 不覆寫) + `createShare` 時複製進 `shares.initialState`。**shares 是 append-only** (一 user 玩多次 = 多筆 share, 各帶自己那關的乾淨初始, 互不覆蓋) — 用 shareId 區分, 不存 world_states/user (會被 overwrite)。
   - 重玩流程: `startReplay(shareId)` → 讀 share.initialState → patch sessionId 成 B 的 clerkUserId (純 LLM flavor, 非 DB key) → saveWorldState(B) → client `router.push('/play?replay=1')` → /play 的 useEffect 偵測 `?replay=1` → getCurrentState() 讀 B 的 world_states → toView → 進遊戲。
   - **可傳遞**: B 通關也存自己的 initialState → B 的卡也能被重玩 → A→B→C 鏈。不在 URL 傳關卡資料 (只傳 shareId, server 撈)。
-  **三輪 bug (全靠加 log 抓 runtime 才定位, 非讀 code)**:
+  **三輪 bug (全靠加 log 抓 runtime 定位, 非讀 code —— 核心 insight 3)**:
   1. **登入 404**: `/sign-in` route 不存在 (Clerk 走 hosted UI), 改 `<SignInButton forceRedirectUrl>`。
   2. **重玩「失敗」假象**: server action 裡 `redirect('/play')` 拋 NEXT_REDIRECT error, 從 client component event handler 呼叫時被 `catch` 攔下顯示「重玩失敗」, navigation 沒發生。改: server action 回傳 `{status:'ok'}`, client 自己 `router.push`。**教訓: Next.js redirect() 在 server action 裡是用「丟特殊 error」實作的, client try/catch 會誤殺。**
   3. **重玩跳到開新場景**: /play 本來沒有「讀現有 world_states 進遊戲」的 on-mount 邏輯 (進頁就是從按鈕開始), startReplay 存了快照但 /play 沒讀。加 `?replay=1` useEffect → getCurrentState 載入。
@@ -217,7 +227,7 @@ Phase 1 老玩家 (Player S) 主動回流玩 Phase 2 大改版 (餵貓 + 3D)。*
 - **F-mobile-viewport** [web 特有, 追蟲教訓重要]: 手機 (尤其 LINE in-app browser) 鍵盤 / iOS 系統 UI (靈動島、通話列) 出現時, 遊戲版面「跑掉」—— 整頁可橫向左右滑、canvas 右側露空白、捏按鈕被推出畫面切掉。
   **根因**: canvas、輸入列、prefill chip、popup 的寬度都吃 **layout viewport** (402)。iOS 鍵盤 / 系統 UI 只壓縮 **visual viewport** (縮成 352)、**layout viewport 不變**。於是 402 寬的內容 > 352 可視區 → iOS 允許橫向捲動。**canvas 尺寸本身一直正常 (370 穩定), 問題是內容綁錯 viewport 來源。**
   **修 (整頁綁 visual viewport)**: JS 監聽 visualViewport, 把 `visualViewport.width` 寫入 CSS 變數 `--vvw`; PlayPage wrapper + 所有內容寬度綁 `min(原 maxWidth, var(--vvw))`; canvas 偏移用 `--vvml` (margin-left) 修正 (原 `margin:0 auto` 是相對 layout viewport 402 置中, 在 352 可視區裡偏右); `body overflow-x:hidden` 當保險; 桌面 fallback (--vvw/--vvml 未設) 維持原 `margin:auto`/100%。✅
-  **追蟲教訓 (這隻躲了十幾版, 值得記)**: 現象「手機版面亂」與根因「內容綁 layout viewport」隔很遠。一路誤判: 先以為是讀回覆框 (sheet) 定位 → 改 bottom sheet → visualViewport 重定位 sheet → ResizeObserver 寬度過濾 → scrollTo 歸位 → 才靠**畫面 debug overlay 印出 innerW/clientW/vvW/containerW/canvas 各寬度**, 一眼看出 canvas (370) 沒壞、是整頁內容超出縮小的可視區。**未來類似症狀: 別從 sheet/canvas 開始追, 直接看「內容寬度綁的是 layout 還是 visual viewport」+ 用畫面 overlay 印實際值 (手機/in-app browser 不能開 DevTools)。** 同「prefill 當照妖鏡」「加 log 抓 runtime 而非讀 code」的方法論。
+  **追蟲教訓 (這隻躲了十幾版, 值得記)**: 現象「手機版面亂」與根因「內容綁 layout viewport」隔很遠。一路誤判: 先以為是讀回覆框 (sheet) 定位 → 改 bottom sheet → visualViewport 重定位 sheet → ResizeObserver 寬度過濾 → scrollTo 歸位 → 才靠**畫面 debug overlay 印出 innerW/clientW/vvW/containerW/canvas 各寬度**, 一眼看出 canvas (370) 沒壞、是整頁內容超出縮小的可視區。**未來類似症狀: 別從 sheet/canvas 開始追, 直接看「內容寬度綁的是 layout 還是 visual viewport」+ 用畫面 overlay 印實際值。** (= 核心 insight 3「加 log 抓 runtime」的手機版。)
   **跨裝置未驗 (重要)**: 整套修法只在 iPhone + LINE 驗過。其他 iPhone / Android / iPad / 各 in-app browser (IG/FB/Messenger) / 橫向**未驗證**, 且修法含寫死數字 (padding 16、容差) 是風險點。**主動傳播 (PTT/Reddit/HN) 前該系統性驗一輪** — 陌生人裝置雜, 歪掉直接傷第一印象/viral。
   **連帶**: 手機旁白框改底部 sheet + 打字 (input focus) 時收起 (visualViewport 高度定位試過不穩, 改 focus 收起繞開 iOS 鍵盤坑); 剩餘 fit 見 F-mobile-fit。
 
@@ -237,54 +247,32 @@ Phase 1 老玩家 (Player S) 主動回流玩 Phase 2 大改版 (餵貓 + 3D)。*
 - **B (generator 謎題品質)**: 那謎題本身是腦筋急轉彎(「何物無聲卻能言」答案發散: 知識/智慧/書/回音/文字...), 玩家答「文字」其實不算亂答, 是謎題太發散、答案不唯一。這跟 A 無關, 是 generator 生謎題的品質問題。**judge 再好救不了爛謎題** —— 謎題答案越發散, judge 越難判「對/近義/錯」(連正解都不唯一)。
   **待辦**: generator prompt 要求謎題「答案明確、可從場景線索推出」, 避免腦筋急轉彎 / 答案發散的謎語。同族 F-spoil、謎題可解性(修1)、Phase 3 因果圖(謎題形式化、答案可驗證)。屬軸 B。
 
-  **壓力測試 (2026-06-03, 15 場 30 題 + judge 18 組邊界, scripts/stress-gen.ts + test-judge.ts)**:
-  方法: 批量生成 dump 謎題 + 全場線索原文(機械標 ★=solution 片段命中, 但**可推性人工判**, 不讓 LLM 自評); judge 邊界用 production judgeAnswer 餵「順序錯/近義/格式變體」看 verdict。
-  **發現 (問題不在 judge, 全在 generator)**:
-  1. **線索充分度其實大致夠** —— 「線索不足要通靈」的真爛題只 2-3 題(深淵星弱、動物棲地對應)。比預期好。
-  2. **真問題一: generator 常把答案明文寫進描述、根本沒形成謎題**。例: 石像描述直接寫「分別是鷹、蛇、獅、鱷」(順序=答案, 照抄即可); 書脊「拼出 VERITAS」; 標示牌「喊出密語以『釋放』艙門」(答案明寫+語意歧義)。玩家覺得沒在解謎/太淺。
-  3. **真問題二: 答案與線索/提示用不一致的詞, 逼玩家做無線索的轉換**。例: 提示寫「夜空」答案要「星空」; 圖畫「太陽/海浪」答案要「日/海」; judge 正確判這些 wrong → 玩家答合理答案被拒 = 唬爛感。**這是 generator 自己挖的坑, 不是 judge 的錯**。
-  4. **真問題三: 多字答案順序**。順序有意義時描述沒明確指定(玩家答對內容錯順序被判 wrong); 或順序其實無意義卻要求精確順序。
-  5. 偶有**邏輯動機不通**(門禁密碼=病毒編號-抗體序列, 湊得出但不合理)。
-  **judge 容錯光譜 (測完結論: judge 行為基本正確, 不該動)**:
-  - 格式/空格/大小寫/分隔符 → solved ✓ (ruleEnforcer normalizeSolution 先去空白標點大小寫底線 + judge 內部 normalize, 雙層; bypass normalize 直測比真實嚴苛)。
-  - 真順序錯 → wrong (順序有意義時正確)。
-  - 近義/字詞轉換(夜空→星空、太陽→日、自由/夢想→嚮往)→ wrong。**這是對的**: judge 一旦認近義就守不住答案明確性(連「自由≈嚮往」都得放過)。**judge 不該為救 generator 的坑而變寬**。
-  **核心結論**: 謎題品質問題**全在 generator**(明文答案 / 詞不一致 / 順序), judge 救不了也不該救。根本要 generator 會設計「有推理、但答案唯一明確」的謎題。
+  **謎題品質演進 (壓測→止血→重壓測→實玩翻案, 2026-06-03)**:
 
-  **修復路徑 (作者拍板 2026-06-03)**:
-  1. 先試 generator prompt 止血: 禁把答案明文寫進描述 / 答案與線索提示用同一個詞(別逼轉換)/ 多字答案順序明確指定或設計成順序無關。
-  2. 改完**重壓測**(同流程), 看數據判止血夠不夠: 明文答案題降多少、詞不一致題剩多少。
-  3. **止損 + 轉 Phase 3 的判準**: prompt 是「賭 LLM 聽話」、無驗證步驟, 治不了「生成時保證可解」這個結構問題。改一兩輪重壓測仍反覆出包 → **認了, 上 Phase 3 因果圖**(線索=節點/推導=邊/答案=目標節點, 可解性變成可程序驗證的圖性質, 不靠 LLM 自覺)。別在 prompt 上無限調。
-  4. **見人門檻 vs Phase 3 的取捨**: 見人只需要「地板」(謎題別爛到想關掉), 不需要 Phase 3 的「天花板」(複雜多步+結構保證)。傾向: prompt 止血到「不卡死、大致可解」就夠見人, Phase 3 留給核心驗證後的深化。若 prompt 真止不住, 再決定「Phase 3 才見人」還是「接受不完美先見人驗北極星」。
+  壓測 (15 場 30 題 + judge 18 組邊界, scripts/stress-gen.ts + test-judge.ts; 機械標命中、可推性人工判、不讓 LLM 自評) 定位出**問題全在 generator、不在 judge**, 三大類:
+  1. **明文洩漏**: generator 把答案明文寫進描述、根本沒形成謎題 (石像描述直接寫「鷹蛇獅鱷」順序=答案; 書脊「拼出 VERITAS」)。玩家覺得沒在解謎/太淺。
+  2. **詞彙不一致**: 答案與線索用不一致的詞、逼玩家做無線索轉換 (提示「夜空」答案要「星空」; judge 正確判 wrong → 玩家答合理答案被拒 = 唬爛感)。**這是 generator 挖的坑、不是 judge 的錯**。
+  3. **多字答案順序**: 順序有意義時描述沒指定、或順序無意義卻要精確順序。
+  (另偶有邏輯動機不通。)
 
-  **止血執行 + 重壓測結果 (2026-06-03)**:
-  改動 scenarioGenerator.ts: (a) prompt 三段 —— 禁明文洩漏(兩問自檢: 不洩漏 + 不通靈的甜蜜點)、詞彙一致性 section、多字順序二選一(有依據/明示不拘); (b) **新增 validateLexicalConsistency(ws): string[]** —— solution 每個詞須在某 description 原字出現, 違規 → continue 重生。token 分類: number-code(純數字密碼)skip、word-sequence/number-sequence/mixed 的詞 token 須 verbatim。接在 validateScenarioLogic 後。
-  **能力邊界 (寫進註釋)**: ① includes 是「存在性檢查」非「線索有效性檢查」—— 短 token(2位數字/單中文字)可能碰巧出現在無關描述 → 誤判通過; 能擋「答案詞完全沒出現」(夜空vs星空), 擋不了「碰巧出現」。② 數字密碼(skip)的線索充分性不歸此函式管, 歸 prompt 禁洩漏那條(70%)。
-  **重壓測 15 場數據 (止血有效, 判準觸發結論)**:
-  - 明文洩漏: 多次明確 → ~0 明確, 剩 1 邊界(Scene 7 括弧「按順序操作三個閥門(進氣、點火、排氣)」, 括弧已列答案順序)。
-  - 詞彙一致性: 常見無攔截 → **程式保證**, 實機攔截重生(「星辰引路」未在描述出現 → 被擋 → 重生通過)。
-  - 多字順序: 常無說明 → 大多有依據, 剩 2 邊界(Scene 11 列舉順序推斷、Scene 12「按正確順序」要北歐神話域知識 = 變相通靈)。
-  **判準結論: 不需為見人上 Phase 3**。三大問題從「常見」降到「偶發邊界」, 最易致唬爛的詞彙一致性被程式根治。已過見人門檻(沒爛到想關掉)。**Phase 3 回到第三層(核心驗證後深化 + 根治殘留)**。
-  **兩個殘留邊界 (記錄, 非現在修)**:
-  - (a) **括弧/列舉「順便」洩漏答案順序** —— prompt 70% 漏掉的型態(LLM 覺得括弧是說明、沒意識到那就是答案)。Phase 3 或更強驗證才根治。
-  - (b) **要遊戲外域知識 = 變相通靈** (Scene 12 北歐神話世界樹頂→底)。跟腦筋急轉彎同類, 是 generator 另一種發散。可在 prompt 補「謎題不該要遊戲外專門知識」(微調, 不急)。
+  **judge 行為基本正確、不該動 (測完結論)**: 格式/空格/大小寫/分隔符 → solved; 真順序錯 → wrong; 近義/字詞轉換 (夜空→星空、自由→嚮往) → wrong, **這是對的 —— judge 一旦認近義就守不住答案明確性, 不該為救 generator 的坑而變寬**。
 
-  **實玩端到端發現 (2026-06-03, 扮陌生人走完一場「迷航的生態方舟」10 turns 通關)**: dump 壓測看不出、實玩才現的問題 ——
-  - **#1 format hint 缺數量/格式**: 光譜題給了順序依據(由強至弱)但沒明示「輸入幾個詞、怎麼分隔」, 玩家要猜/試錯。puzzle.description 該明示數量+順序+格式三件套。
-  - **#2 假線索物件多**: examine 一堆物件(分配器「微弱蜂鳴」、終端機「顯示日誌」)用了勾人措辭、卻回「沒別的想說」。generator 不分「功能物件 vs 純氛圍」, 把氛圍寫得像有功能 → 玩家鑽死路。在「捏包子問貓」交互裡更傷(問一半得到聳肩, 稀釋核心互動爆點)。
-  - **#3 排序依據邏輯不通(最常犯之一)**: 「向日葵 月光 由強至弱」—— 向日葵不是光源、無法跟月光比光照強度; 玩家靠排除法/常識猜中而非推理。這是止血三類之外的第四類, grep 驗不到、prompt 難治。
-  - 正面: 能通關 ✓、移動/鎖門/persona 手感正常 ✓、玩家會主動選貓味金句做分享卡(A1 正面證據)。
-  - **結論修正**: dump 壓測**低估**了問題(看 dump 覺得合理、實玩才發現淺/邏輯不通)。真正的謎題品質要靠實玩。「邏輯不通」作者實玩經驗判斷=**最常犯的錯之一**, 不是偶發 —— 這推翻了「止血夠、過見人門檻」的樂觀, 觸發上 Phase 3。
+  **止血執行 (scenarioGenerator.ts)**: (a) prompt 三段 —— 禁明文洩漏 (兩問自檢: 不洩漏 + 不通靈的甜蜜點)、詞彙一致性 section、多字順序二選一; (b) **validateLexicalConsistency(ws)** —— solution 每個詞須在某 description 原字出現, 違規 continue 重生 (number-code skip、word/number/mixed sequence 的詞 token 須 verbatim)。**能力邊界 (註釋)**: includes 是「存在性檢查」非「有效性檢查」—— 擋得了「答案詞完全沒出現」(夜空vs星空), 擋不了短 token「碰巧出現」; 數字密碼線索充分性歸 prompt 禁洩漏那條。
+
+  **重壓測判準: 不需為見人上 Phase 3** —— 三大問題從「常見」降到「偶發邊界」, 最易致唬爛的詞彙一致性被程式根治 (實機攔截重生驗過)。**兩個殘留邊界 (記錄、非現在修)**: (a) 括弧/列舉「順便」洩漏答案順序 (prompt 70% 漏掉的型態、LLM 沒意識到括弧就是答案); (b) 要遊戲外域知識 = 變相通靈 (北歐神話世界樹頂→底, 跟腦筋急轉彎同類)。
+
+  **⚠️ 實玩翻案 (重要、推翻上面的樂觀)**: 扮陌生人實玩一場 10 turns 通關後發現 **dump 壓測低估了問題** —— dump 看著合理、實玩才現淺/邏輯不通。實玩才現的:
+  - **format hint 缺數量/格式**: 給了順序依據卻沒明示「輸入幾個詞、怎麼分隔」, 玩家試錯。description 該明示數量+順序+格式三件套。
+  - **假線索物件多**: generator 不分「功能物件 vs 純氛圍」, 把氛圍寫得像有功能 (examine 勾人措辭卻回「沒別的想說」) → 玩家鑽死路。在「捏包子問貓」交互裡更傷 (問一半得聳肩、稀釋核心互動)。
+  - **排序依據邏輯不通**: 「向日葵 月光 由強至弱」—— 向日葵不是光源、無法比光照; 玩家靠常識猜中非推理。止血三類之外的第四類、grep 驗不到、prompt 難治。
+  - **方法論教訓**: 「謎題品質的真證明是實玩解到通關, 非看 dump」。dump 乾淨 ≠ 實玩順利。「邏輯不通」作者實玩判斷 = **最常犯的錯之一、不是偶發** —— 這推翻「止血夠、過見人門檻」的樂觀, **觸發決定上 Phase 3**(見下)。
 
 ### Phase 3 因果圖 — 定位釐清 + 決定開做 (2026-06-03, 研讀 world-kernel spec)
 
+> **對外定位、真正價值、能力邊界、missing-premise vs wrong-premise 拆分、時機** 見設計文件「Phase 3」段(定位釐清 2026-06-03)。此處只記 BACKLOG 本職的實作層細節 —— 參考來源、節點/邊映射、分階段、不搬什麼。
+
 **參考**: 作者另一研究專案 world-kernel(`~/Desktop/GitHub/world-kernel`), L1 因果基板 / L2 語義投射 / L3 LLM 角色(對應其 Phase 1~6; Phase 7~12 是 LLM hallucination 分析, 不 port)。是 strategy/spec, 非可直接接的實作; 語言架構不同(OCaml/Racket/Python vs TS), Phase 3 是「借概念在 TS 重建」非「接 code」。
-**真正價值 = 解鎖多步複雜謎題(engine 能力天花板)**: 現 engine 只有單層「線索→字串答案」, 故謎題淺。因果圖 InferenceNode(中間結論)讓謎題能多步(A+B→中間, 中間+C→答案)。**謎題淺 + 邏輯不通同根**: engine 沒有多步結構, LLM 把多步壓進字串答案時丟推理鏈。
-**能力邊界 (關鍵, Claude Code 研讀確認)**: 因果圖 + path memory(Φ3 visited-set)+ provenance 全是**結構/追溯**層, **不驗語義**(world-kernel 哲學 meaning-not-in-L1)。path memory 是「知道結果怎麼產生的」(provenance), 非「驗結果對不對」。所以邏輯不通拆兩類:
-  - **missing-premise(遊戲內沒線索建立這步、玩家靠遊戲外常識補)= 作者判斷最痛/最常犯** → 因果圖**可達性程式根治**(無 ClueNode 支撐該步 → SolutionNode 不可達 → 重生)。**Phase 3 直接命中。**
-  - **wrong-premise(線索存在但本身荒謬, 向日葵比月光亮)= 次要** → 因果圖治不了(L2 邊語義), 靠 generator 設計規則「禁 domain-mapping 邊」壓(同止血精神, 不是事後驗、是不讓它生)。
-**定位**: Phase 3 = **長期 engine 底層(解鎖複雜謎題)**, 治 missing-premise 是順帶。也是長期方向 UGC host 的「可解性保證工具」前提。
-**時機**: **不擋見人**(見人只需止血後單層謎題夠不爛)。在 branch 分階段、main 隨時可見人。
+**能力邊界 (實作層, Claude Code 研讀確認)**: 因果圖 + path memory(Φ3 visited-set)+ provenance 全是**結構/追溯**層、**不驗語義**(world-kernel 哲學 meaning-not-in-L1)。path memory 是 provenance(知道結果怎麼產生)、非「驗結果對不對」。→ missing-premise 可達性程式根治(Phase 3 直接命中)、wrong-premise 治不了靠 generator 規則禁 domain-mapping 邊壓。(此拆分的完整論述見設計文件。)
 **節點/邊映射 (Claude Code 設計)**: 節點=命題(ClueNode 玩家可觀察的事實 / InferenceNode 中間結論 / SolutionNode 答案), 非物件。邊帶 inferenceType(extract/combine/order-by-index 可程式驗; order-by-stated-rule/domain-mapping 不可、後者禁止)。PuzzleGraph 平行於 WorldState 輸出, 不取代。
 **分階段**: 3a generator 輸出 PuzzleGraph + 可達性/路徑長度≥2 驗證(治 missing-premise、獨立可驗) → 3b 禁 domain-mapping + 擴 validateLexicalConsistency 驗 extract/combine → 3c judge 接 PuzzleGraph(答案命中 SolutionNode、減誤判) → 3d visibility 接 ClueNode 可觀察性。**先做 3a**。
 **不搬**: on/off state、cascade/BFS 傳播、contested、overlay、L3 NPC 機制(已有貓四拍)、snapshot——謎題是 DAG + 一次性推導, 不需要這些。
@@ -346,19 +334,18 @@ Phase 1 老玩家 (Player S) 主動回流玩 Phase 2 大改版 (餵貓 + 3D)。*
 
 **驗證啟示**: 「石門復現」很難測, 因為要同時湊齊 B(爛謎題)+ 模糊答案 + A(演成功)。但不需要復現石門來驗 A —— A 的驗證走「假 move 防守」(直接前往鎖房 → 看 narration 演不演穿越、currentLocationId 變不變、snowball 不 snowball, 不依賴謎題品質, 純戳四拍)+「judge 三路用答案明確的謎題測」(把謎題爛這變數拿掉、單驗 judge 準度)。
 
-### F-visibility (NEXT UP, 最高優先, engine 架構級): 沒有 visibility 模型 / 物件全可見
+### F-visibility (🔄 partial — 核心已解、生成比例待多場實測): visibility 模型
 
-**現象**: engine 沒有「物件被發現了沒」的概念。Item schema 只有 id/name/description/locationId/isTakeable/isLocked/unlockItemId — 沒有 visible/hidden/discovered。物件結構完全平的 (generator prompt 明文「no sub-containers, items sit directly in location's itemIds」), 「便條在桌上」只能讓便條和桌子並列在同一 location 的 itemIds → 進房第一秒兩者同等可見、同等可 take。「查看桌子才發現便條」這層探索**從來不存在** — 「查看」在 engine 層不是動作, 只是丟給 LLM 生 narration, 不改 state、不 promote 任何物件。
+**核心已解 (2026-06-02, 實作見已解區 F-visibility)**: 原本 engine 沒有「物件被發現了沒」的概念、物件結構全平、進房全可見、「查看」不改 state。已補:Item 加 hidden + belongsTo(hidden 由 belongsTo 推導、LLM 只填 belongsTo);examine 家具 promote hidden children;toView/context 依 visibility 篩。單場實玩驗過「掀床→枕頭底下藏照片」(會生 belongsTo、examine reveal 真的跑)。
 
-**怎麼被揪出**: prefill 查看 chip 從 sceneItems 生成, 把「查看便條」白紙黑字攤在玩家眼前、無法繞過。narration 的軟把關 (turnHandler prompt「never reveal undiscovered items」) 還可能含糊, chip 是明確列表 → 必穿。**prefill 當照妖鏡, 同 M2 tap UI 揭穿隱形 engine bug 的機制。**
+**怎麼被揪出 (教訓保留)**: prefill 查看 chip 從 sceneItems 生成、把「查看便條」白紙黑字攤在玩家眼前無法繞過,narration 軟把關含糊、chip 是明確列表 → 必穿。**prefill 當照妖鏡, 同 M2 tap UI 揭穿隱形 engine bug。**
 
-**同族 (root cause 重要)**: 跟 F-web-鎖門穿透 (鎖純靠 LLM 軟把關、沒 state 欄位 → tap 明確指令一逼就穿)、F-web-孤兒item 同一個教訓 — **LLM 軟性把關擋不住明確 UI / state 缺欄位**。對應方法論 insight: 「LLM 輸出不被信任為最終 state, 該補程式層 / state 結構」。
+**同族 root cause (教訓保留)**: 跟 F-web-鎖門穿透、F-web-孤兒item 同一教訓 —— **LLM 軟性把關擋不住明確 UI / state 缺欄位**(= 核心 insight 1 的反面根因)。
 
-**要做**: Item 加 hidden / revealedByAction 之類欄位; 「查看」變成會 promote 物件成 visible 的真動作; toView() 與 LLM context 都依 visibility 篩 (只送已發現的)。generator 要能生成「便條歸屬於桌子、查看桌子才現」的結構。
-
-**不只是修 bug**: 這是「逐步發現 / 探索層次」這個遊戲性的基礎 — 目前所有東西開局全攤開, 根本沒有探索。屬遊戲設計決定 (作者已拍板: 要這層)。架構級, 動手前先說明方向 (schema + 查看動作流程 + visibility 篩選) 再寫。
-
-**優先級**: next up, 但**非 T0 阻斷** — 遊戲照玩、能通關、能驗證, 只是探索被提前揭露。提到最前是不讓它無限期靠軟把關撐著。做好後 prefill 查看 chip 改為依 visible 過濾 (現在 chip 暫留, 標已知缺陷)。
+**🔄 待驗 (為何還是 partial、不是 ✅)**:
+- **generator 生 belongsTo 的比例穩不穩 —— 需多場實測累積**。單場只證「會生、真用」, 生得夠不夠、穩不穩沒驗。比例不穩 → 探索層次時有時無。
+- **reward 的 solve 揭露路徑未做**: visibility 只做了一條揭露路徑(belongsTo 家具 + examine),「reward 解謎後才出現」這條沒做 → reward 提前可見(劇透)。見 F-reward-reveal。
+- 做穩後 prefill 查看 chip 改依 visible 過濾(現 chip 暫留、標已知缺陷)。
 
 ### F-share (核心已解 — M4a 已上線): 通關後沒可分享 artifact
 
@@ -491,7 +478,7 @@ repairItemConsistency 的 console.warn 會持續報「LLM 每場漏幾個雙向�
 
 ### 小尾巴 (replay 收尾遺留, 輕)
 - **重玩載入文字 misleading**: 重玩進 /play 時短暫顯示「🔮 謎題生成中…(約 30–60 秒)」, 但重玩其實是毫秒級 DB 讀取 (載快照, 沒在生成)。會讓 B 以為在等生成。改: 加獨立 loadingReplay 狀態顯示「載入這一關…」之類。
-- **ReplayCTA 兩按鈕大小不一**: 「挑戰 EscapeBot →」比「重玩這一關」大 (寬高不一致)。純 CSS 對齊。
+- **ReplayCTA 兩按鈕大小不一**: 「挑戰 EscapeBot →」比「重玩這一關」大 (寬高不一致)。純 CSS 對齊。(註: 按鈕現文字「EscapeBot」是對外顯示名,待統一為 Cat Got Your Words —— code/UI 改動,不在文件範圍。)
 - **offset 族一次性盤點**: 「拿 sprite.x/y 當包子位置、漏視覺中心偏移」已出現過多條路徑 (M3 修過點選/描邊/落地, prefill 後又揪兩條)。grep 所有 sprite.x/y 用法, 一次盤完防第 N 條。
 
 ---

@@ -38,7 +38,7 @@ M4a 的卡是 **server 端生成**(從存的 scenarioTitle/quote/turnCount 畫�
 ## 版面(C)
 - 上半：金句(大字，沿用 M4a 的選句)。
 - 下半：本局滿地包子縮圖(被埋的貓那種現場感)。
-- 署名小字(EscapeBot · N turns)沿用。
+- 署名小字(EscapeBot · N turns)沿用。（註:署名現文字「EscapeBot」是對外顯示名,待統一為 Cat Got Your Words —— code/UI 改動,不在文件範圍。）
 - 防偽：金句是 server 選項、最終卡 server 合成 → 金句不可偽造、防偽保住；滿地包子是 client 真截圖上傳(這半本來就是「炫現場」不是「炫成績」,真實截圖即可,不需防偽驗證)。
 
 ## 前提

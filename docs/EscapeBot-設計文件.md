@@ -1,5 +1,6 @@
-# EscapeBot 設計文件
+# Cat Got Your Words 設計文件
 
+> 對外正式英文名：**Cat Got Your Words**（已定）。`EscapeBot` 為舊代號 / Discord 版名、`escapebot-web` 為 GitHub repo 名，兩者沿用為檔名與技術識別字，非產品名。中文對外名未定（方向見下方「名字」段）。
 > LLM 驅動的中文密室逃脫遊戲
 > 最後更新：M3 上線 + 3D 改造後
 
@@ -26,7 +27,7 @@
 |------|--------|--------|
 | **EscapeBot-設計文件**（本檔） | 產品全貌、成功指標、技術棧、三階段路線、UGC/blog 長期願景 | 要全貌 / 對外說明 |
 | **缺口分析-優先級** | 兩軸並行（Viral 吸引 / 流失留得住）+ 雙 ship 線 + 急迫性排序 | 決定「下一步做什麼」 |
-| **BACKLOG** | engine/generator 品質 bug、findings、chain mode、成本、deploy 教訓 | 找具體待辦 / 已解 bug |
+| **BACKLOG** | engine/generator 品質 bug、findings、成本、deploy 教訓 | 找具體待辦 / 已解 bug |
 | **M3-設計與收尾** | M3 現狀（含 3D 深度鎖定改造）+ 原始設計稿與 Q1–Q5 後續答案 | 看包子貓循環怎麼做的 |
 | **M4b-spec** | M4b 規格（分享卡視覺 + 重玩這一局） | 做 M4b 時 |
 | **分享卡C版-金句加滿地包子** | 分享卡 C 版流程（截圖上傳→選金句→server 合成） | 做分享卡時 |
@@ -39,7 +40,7 @@
 
 ## 一、這是什麼
 
-EscapeBot 是一個由大型語言模型（LLM）即時驅動的中文密室逃脫遊戲。玩家進入一個由 LLM 生成的房間，透過與遊戲互動（探索、解謎、移動）一步步找到逃脫的方法。
+Cat Got Your Words 是一個由大型語言模型（LLM）即時驅動的中文密室逃脫遊戲。玩家進入一個由 LLM 生成的房間，透過與遊戲互動（探索、解謎、移動）一步步找到逃脫的方法。
 
 跟傳統文字冒險遊戲最大的不同：**場景、物品、謎題、敘述全部由 LLM 即時生成與回應**，不是預先寫死的劇本。每一場遊戲的房間都不一樣，玩家的任何輸入 LLM 都會即時理解並回應。
 
@@ -173,7 +174,7 @@ Web 版沒有把 Discord 版直接「加上圖形介面」，而是**根本性�
 - **世界狀態（WorldState）**：房間、物品、謎題、玩家位置、歷史記錄的完整狀態。
 
 ### 核心技術哲學：LLM 的輸出永遠不被信任為最終狀態
-這是 EscapeBot 可能的核心技術護城河。LLM 生成的關卡可能不一致、不可解、邏輯有漏洞。所以有一層**生成後的驗證與修復機制**：
+這是 Cat Got Your Words 可能的核心技術護城河。LLM 生成的關卡可能不一致、不可解、邏輯有漏洞。所以有一層**生成後的驗證與修復機制**：
 - **validateScenarioLogic**：檢查關卡是否有死鎖（例如解鎖某房間的鑰匙被鎖在那個房間裡）。
 - **repairItemConsistency**：自動修復可修復的不一致（例如物品的雙向記錄沒對齊）。
 - 哲學：**能自動修的就修，真正的死鎖才重新生成。** LLM 的創意產出 + 程式的可靠性保證，兩者結合。
@@ -224,7 +225,7 @@ Web 版沒有把 Discord 版直接「加上圖形介面」，而是**根本性�
 - （描邊偏移、落地包子浮空——已修）
 
 **內容品質（較關鍵）**
-- **engine visibility 模型 — ✅ 已完成(2026-06-02)**：原本所有物件進房全可見、無「未發現」概念。已補:Item 加 hidden + belongsTo,hidden 由 belongsTo 推導(LLM 只填 belongsTo);examine 家具 promote hidden children;toView/context 依 visibility 篩。是「逐步發現」遊戲性的基礎。(實作見 BACKLOG F-visibility。待補:reward item 的 solve 揭露,見 F-reward-reveal。)
+- **engine visibility 模型 — 🔄 核心完成、生成比例待實測(2026-06-02)**：原本所有物件進房全可見、無「未發現」概念。已補:Item 加 hidden + belongsTo,hidden 由 belongsTo 推導(LLM 只填 belongsTo);examine 家具 promote hidden children;toView/context 依 visibility 篩。是「逐步發現」遊戲性的基礎。**待驗:generator 生 belongsTo 的比例穩不穩 —— 單場已證「會生、真用」,但夠不夠、穩不穩需多場實測累積。** (實作見 BACKLOG F-visibility。另待補:reward item 的 solve 揭露,見 F-reward-reveal。)
 - **回合處理四拍重構 — ✅ 已完成(2026-06-02)**：原本 narration 與 stateChange 同一 LLM call 生,stateChange 被 reject 後 narration 照演 → LLM 演假成功(假 solve/假 move)、污染 history、snowball(石門事件)。已改「意圖→判定→敘述」四拍,narration 永遠在 state 定案後生,solve 走獨立 judge(verdict 三路)。**是 Phase 3 因果圖「判定結構化/可驗證」那一面的前身。**(見 BACKLOG F-turnloop-v2、F-stonedoor。)
 - 謎題可解性問題：LLM 生成的謎題有時線索不足以推出答案，玩家卡關。已先做止血（限制 LLM 提示只能用遊戲內資訊，不能腦補現實知識），但根本的「生成時保證可解」尚未做。**另:謎題答案發散(腦筋急轉彎)讓 judge 難判、玩家答合理答案被判錯=唬爛感。** **進展(2026-06-03)**: 壓測後 generator prompt 止血 + validateLexicalConsistency 程式驗證,三大症狀(明文洩漏/詞彙不一致/多字順序)降到偶發邊界、詞彙一致性程式根治。根本的「結構化保證可解」仍留 Phase 3。
 - 其他關卡品質：線索過度暴露（劇透）、容器/物品鎖機制、物品重複顯示、謎題位數描述不符、資料庫連線中斷無重試等。
@@ -235,7 +236,7 @@ Web 版沒有把 Discord 版直接「加上圖形介面」，而是**根本性�
 
 ### 整體路線：三個階段
 
-EscapeBot 的演進分三個階段，差別在於**改變的層次**：
+Cat Got Your Words 的演進分三個階段，差別在於**改變的層次**：
 
 ```
 Phase 1：文字          — Discord 純文字版，已上線
@@ -271,7 +272,31 @@ Phase 3：因果圖當底層   — 未來（改底層邏輯模型本身）
 - 包子整理/收藏（玩家上色、收藏線索、回顧——把撿來的包子變成破解謎題的思考痕跡）
 - 貓的容錯動畫（射歪的包子貓甩尾巴掃回）
 - 手繪素材（貓的咬/嚼/吐動畫、黃金/腐爛包、真正的場景背景——目前都是 placeholder）
-- chain 模式（多關卡串連，已確認方向，細節待規劃）
+- chain 模式（多關卡串連，已確認方向）—— 設計見下方「chain 模式」小節
+
+#### chain 模式（多關卡串連，方向已確認、細節待規劃）
+
+> 來源:Player H 通關後主動問「通關後還有下一個嗎」、Chain mode idea 反應「不錯」、不擔心「會太長」;Player A v2 通關沒主動分享(通關=結束=retention 自然斷);Observer Y「需要 engagement upgrade」。玩家自然 baseline 期望 product 有 continuation。
+
+**設計(proposed)**:
+- Room 1 通關 → 結局頁「進入下一章」button(player-controlled,非自動)。
+- Room 2 scenario gen 接受 room 1 summary 當 context。
+- Inventory carry:hybrid(universal items carry、room-specific reset)。
+- Finite chain:每條 5-7 chambers。
+- 第一個 chain product:未定(候選 Spaceship Trilogy / Alchemist Tower / 偵探推理)。
+
+**strategic value**:
+- Niche deepening — LLM + escape room + finite chain,無直接競品。
+- 「值得分享」槓桿 — 「我玩到第 N 章了」是 status signal。
+- 不違反 success metric 的自然 retention(靠敘事 hook,非機械式獎勵)。
+- AI Dungeon 有 endless mode 但無 genre,本作提供 structured chain。
+
+**open questions(待規劃)**:
+- Inventory carry hybrid 的具體 rules。
+- 不同 chain products 之間切換 / mid-chain abort 怎麼處理。
+- Endgame:每條 chain 最後 chamber 怎麼 narrate「saga ends」而不 anticlimax。
+
+> engineering 規劃(schema + first chain product + chain UI/endgame)屬待辦,追蹤見 BACKLOG。
 
 **Phase 2 內的內容品質止血**：
 - 謎題可解性：已限制 LLM 提示只能用遊戲內資訊（止血腦補外部知識）。可再加簡單的線索檢查。但**根本解法留給 Phase 3**。
@@ -294,7 +319,7 @@ Phase 3：因果圖當底層   — 未來（改底層邏輯模型本身）
 - 一旦謎題是可驗證的因果圖結構，可解性就是程式能算的（圖可達性），不再靠 LLM 自覺保證。
 - 這呼應 engine 既有哲學「LLM 創意 + 程式驗證」——只是把驗證能力從「死鎖」擴展到「完整可解性」。有了描述語言這個結構約束，LLM 生成謎題圖比生成自由文字可靠得多。
 
-**思路來源**：因果圖 / 可達性的設計思路，可參考作者另一個研究專案（因果級聯引擎）的對應 pattern。但 EscapeBot 的實作是自己的（不共用程式碼），只借觀念。
+**思路來源**：因果圖 / 可達性的設計思路，可參考作者另一個研究專案（因果級聯引擎）的對應 pattern。但 Cat Got Your Words 的實作是自己的（不共用程式碼），只借觀念。
 
 **定位釐清（2026-06-03，研讀 world-kernel spec 後）**：Phase 3 的真實價值與能力邊界,比「徹底解決可解性」更精準——
 - **真正價值 = 解鎖多步複雜謎題(engine 能力天花板)**。現在 engine 只有「線索→字串答案」單層(字串比對),所以 generator 只能生單層密碼題、玩起來淺。因果圖的 InferenceNode(中間結論)讓謎題能表達「A+B→中間結論,中間結論+C→答案」的真多步。**謎題淺 + 邏輯不通其實同根:engine 沒有表達多步推理的結構,LLM 把多步壓進一個字串答案時丟了推理鏈。** 因果圖給了這結構,治邏輯不通是解鎖多步的副產品。
@@ -307,7 +332,7 @@ Phase 3：因果圖當底層   — 未來（改底層邏輯模型本身）
 
 ### 長期方向（產品成熟後）—— UGC / 付費 host 平台
 
-更遠的方向：產品成熟、核心玩法被驗證好玩 + 值得分享之後，**開放資源給付費 host，讓他們設計自己的謎題、場景、機制，以及貓的個性**。EscapeBot 從「一個作者做的解謎遊戲」演進成「一個讓別人也能造解謎世界的平台」——作者從內容作者轉成工具/平台提供者，付費 host 產出內容。
+更遠的方向：產品成熟、核心玩法被驗證好玩 + 值得分享之後，**開放資源給付費 host，讓他們設計自己的謎題、場景、機制，以及貓的個性**。Cat Got Your Words 從「一個作者做的解謎遊戲」演進成「一個讓別人也能造解謎世界的平台」——作者從內容作者轉成工具/平台提供者，付費 host 產出內容。
 
 這個方向**抬高了某些現有項的長期價值**（解釋了為什麼它們值得投資，即使近程 viral 槓桿不是最高）：
 - **Phase 3 因果圖** 不只是作者的護城河，是**給 host 的「可解性保證工具」**——host 不可能手動驗證自己設計的謎題可解，因果圖的可達性檢查能幫他們（或系統）保證。
