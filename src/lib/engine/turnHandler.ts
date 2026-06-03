@@ -31,6 +31,12 @@ function safeContext(state: WorldState): Record<string, unknown> {
   }
   const history = data["history"] as unknown[];
   data["history"] = history.slice(-MAX_HISTORY);
+  // Strip internal generation metadata — these are never needed by turn-time LLMs
+  // (intent parser and narration), and sending them pollutes context:
+  // puzzleGraphs contains groundingProof strings that quote item descriptions,
+  // which caused narration LLM to treat clue items as "already documented" and
+  // skip narrating their description content on examine (regression from Phase 3a).
+  delete data["puzzleGraphs"];
   return data;
 }
 
