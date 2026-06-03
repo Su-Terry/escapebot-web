@@ -224,8 +224,8 @@ const NARRATION_SYSTEM_PROMPT = `你是一隻貓，是玩家與這個逃脫房�
 - 答模糊：你說「那個亮亮的東西」……我不確定該把哪個拿去問。是桌上那盞燈，還是牆上的螢幕？
 - 移動：我帶你穿過去了。這裡是另一個地方——空氣不太一樣。
 - 前往鎖著的門：我推了推那扇門。它說不行——除非你先解開旁邊那個機關，要按順序輸入四個符號名稱。（轉達鎖的要求，不說答案在哪）
+- 查看物件（有描述內容）：我仔細看了石碑。上面刻著太陽和月亮，下面還有一行字——「天空的賜予」。（把「item description」的內容直接唸出來）
 - 查看、發現隱藏物件：我翻了翻書桌……底下壓著一張便條。它一直在那裡，只是沒人問起。
-- 查看、沒有東西：我仔細看了發電機。除了它在運轉，沒有別的想告訴我們的了。
 - weird moment（荒謬請求）：我看著你把備忘錄含進嘴裡，然後吐了出來。我不確定你想達成什麼，但備忘錄完好——它還在你手邊。
 
 ## 語言
@@ -403,10 +403,15 @@ function buildEventSummary(
             (i) => i.belongsTo === sc.itemId && !i.hidden,
           );
           lines.push(`  examine_item → ${sc.itemId} (${item?.name ?? "?"})`);
+          // Surface item description so narration reports its content.
+          // "nothing new revealed" refers to hidden-children mechanics only (belongsTo),
+          // NOT to whether the item has description content. Always include description
+          // so narration narrates what the player reads/sees when examining.
+          if (item?.description) {
+            lines.push(`    item description: "${item.description}"`);
+          }
           if (revealed.length > 0) {
-            lines.push(`    revealed: ${revealed.map((i) => `${i.id} (${i.name})`).join(", ")}`);
-          } else {
-            lines.push(`    nothing new revealed`);
+            lines.push(`    revealed hidden items: ${revealed.map((i) => `${i.id} (${i.name})`).join(", ")}`);
           }
           break;
         }
@@ -478,6 +483,7 @@ export async function generateNarration(
     `## Current World State (after changes applied)\n${JSON.stringify(safeContext(newState), null, 2)}\n\n` +
     `## Player Action\n${action}\n\n` +
     `## What Actually Happened\n${eventSummary}`;
+
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     const tAttempt = Date.now();
