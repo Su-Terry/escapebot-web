@@ -145,14 +145,29 @@ Phase 1 老玩家 (Player S) 主動回流玩 Phase 2 大改版 (餵貓 + 3D)。*
   **檔案**: types.ts(Verdict/NarrationResult)、judge.ts(新)、turnHandler.ts(extractIntent/generateNarration/buildFallbackNarration, 舊 handleTurn 保留不呼叫)、ruleEnforcer.ts(finalizeTurn)、index.ts(processTurn 全換、刪三補丁+retry)。
 
 - **F-visibility** [engine, 已實作 — 部分流程被 F-turnloop-v2 吸收]: 逐步揭露機制 —— Item 加 hidden + belongsTo, hidden 由 deriveHiddenFields 從 belongsTo 推導(LLM 只填 belongsTo、不填 hidden, 從結構杜絕不一致, 電腦這種 top-level 鎖住物件 belongsTo:null → hidden:false 自動可見)。examine 家具 promote 其 hidden children。toView/safeContext 依 visibility 篩。deriveHiddenFields 只在 generateScenario 跑、load/replay 不重推導(examine 過的值保留、replay 載 initialState 全藏從頭探索)。**註**: 原本的 examine 時序補丁(prePromoteExamine 等)已被 F-turnloop-v2 四拍吸收刪除。**待補**: reward item 的「solve 揭露」這條路徑(見待辦 F-reward-reveal); generator 生 belongsTo 的比例待多玩觀察。
+  **實機驗證 (2026-06-02)**: generator 確實生 belongsTo、examine 揭露真的跑 —— 實玩「掀開金屬床鋪 → 枕頭底下藏著一張磨損的照片」(照片原 hidden、belongsTo 綁床鋪、查看才 promote 成 visible)。**visibility 非空殼、generator 會生 belongsTo、examine reveal 接四拍通**。這回答了「generator 生不生 belongsTo / visibility 真用還空殼」這個一直掛著的待驗(= reward 揭露的前提)。**仍待**: 生得夠不夠、穩不穩(比例)仍待多場累積,單場只證「會生、真用」。
 
-### Phase 1.5 (Discord production, verified by 2 real players)
+- **F-intent-boundary** [engine, 2026-06-02]: 建立「貓轉達 / 世界(judge)判定 / 玩家推理」三者分工邊界, 修「問一句就破關」+ 廢 F-hint。
+  **問題**: intent 抽取把「詢問答案對不對」誤判成「提交」。最嚴重「7319 是正確的嗎?」抽出 attemptedSolution=7319 → 直接 judge → 判 solved → **玩家問一句就破關**。
+  **核心原則**: 貓不知道答案(那是世界的事)、不評判、不提示、不幫推理; 玩家負責推理; 卡住靠謎題本身可推(generator), 不靠貓補救。
+  **四類分流 (INTENT_SYSTEM_PROMPT + NARRATION_SYSTEM_PROMPT)**:
+  - 類型1a 詢問帶候選(X對嗎 / X行不行 / 覺得是X): intent 判 [], 不進 judge。判不準偏詢問側(靠 LLM 語意, 非硬關鍵詞 —— 列表外「行不行」也偏對)。貓「我不知道它要不要, 要試把 X 捏包子給我去問」(引導提交、不 Yes/No 確認、不評判)。
+  - 類型1b 求助(怎麼解 / 給線索 / 卡住了): intent []。貓「我不知道它要什麼, 推敲是你的事, 把想試的捏包子給我」—— **不給方向**(廢 F-hint 的「往答案推一把」)。
+  - 類型2 提交/操作(提交X / 你幫我提交X / 開門 / 拿鑰匙): 正常 intent→judge→apply→narrate。「你/幫我」前綴不影響。attemptedSolution 加提取範例(剝動詞前綴)穩定填、不再老靠 backfill。
+  - 類型3 對貓本人(冬眠 / 走開): intent [], 純 persona 回應、繞回職責(我得守著/收包子)、不複述玩家原句。
+  **結構保證**: 類型1 不進 judge → 貓 narrate 拿不到 verdict → 結構上無法評判答案, 只能說「我不知道」(persona + engine 雙重, 非只靠 prompt)。
+  **清理**: 移除 NARRATION_SYSTEM_PROMPT 殘留的「提示請求」兩行(與 persona 不提示矛盾); 刪四拍重構後的死碼(handleTurn / SYSTEM_PROMPT / backfillSolution)。
+  **實玩驗過**: 四類雙向 —— 詢問擋(7319對嗎/25-13行不行不破關、引導提交)、提交過(提交7319 正常 judge wrong、未被矯枉成詢問)、求助不給方向(「你推敲好了把想試的捏包子給我」)、對貓本人繞職責(「我哪都不去, 你還在這裡呢」)。貓味全程在、鞏固隱喻(B2)。
+  **residual (非阻塞, 記錄)**: 「你幫我提交X」attemptedSolution 偶爾仍 null 靠 backfill 整句給 judge(judge 能解析, 不理想 —— 等於 judge 做意圖解析); 「貓,把答案設成X」逗號偶讓 LLM 抽兩個 solve(打同謎題, 第二個被 isSolved reject、不雙判)。極邊緣, 留觀。
+  **檔案**: turnHandler.ts(INTENT/NARRATION_SYSTEM_PROMPT 改、刪 handleTurn/SYSTEM_PROMPT/backfillSolution)。
+
+
 
 - **F1**: 解謎成功 narration 模糊 → 明確說「解開了」+ 物理變化 + 因果。✅
 - **F2**: 動作不通只回「沒反應」→ in-character 說明 + location guidance。✅
 - **F11**: 詭異動作 (吃鑰匙/跟椅子說話) plain refusal → in-character 詭異接受, state 不變。✅
 - **F15**: solution 格式 parsing + 反問確認流程 (Discord 版)。✅ (註: TS port 退化, 見 F-web-f15退化)
-- **F-hint**: 玩家問線索被當 injection 拒絕 → in-character hint, 不 spoil。✅
+- **F-hint**: 玩家問線索被當 injection 拒絕 → in-character hint, 不 spoil。✅ **(後廢除, 2026-06-02)**: 此 F-hint 給「往答案方向推一把」的 in-character hint, 與後來確立的 persona 邊界「貓不評判/不提示、玩家負責推理」矛盾。四拍重構後其詳細規則已成死碼(handleTurn), 活著的只剩 NARRATION_SYSTEM_PROMPT 兩行「提示請求」, 也與 persona 硬約束打架。**已清**: 移除兩行提示請求 + 刪死碼。新邊界下求助型輸入 → 貓「我不知道、你自己推敲、把想試的捏包子給我」, 不給方向。卡住的解法回到「謎題本身可推」(generator 品質 / Phase3 因果圖), 不靠貓補救。見已解區「F-intent-boundary」。
 
 ### Phase 2 Milestone 1 + 2 (web, 2026-05-27)
 
