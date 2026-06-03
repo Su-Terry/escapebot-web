@@ -157,14 +157,22 @@ function dumpPuzzleGraph(
       .map(([id]) => id),
   );
 
+  const KNOWN_PREFIXES = ["locations.", "location.", "location:", "items.", "item.", "item:"];
   for (const [nodeId, node] of Object.entries(graph.nodes)) {
     if (node.type !== "clue") continue;
     if (!node.sourceRef) {
       structIssues.push(`ClueNode '${nodeId}' 缺 sourceRef`);
-    } else if (ws.puzzles[node.sourceRef]) {
+      continue;
+    }
+    // Mirror validatePuzzleGraphs prefix stripping
+    let ref = node.sourceRef;
+    for (const prefix of KNOWN_PREFIXES) {
+      if (ref.startsWith(prefix)) { ref = ref.slice(prefix.length); break; }
+    }
+    if (ws.puzzles[ref]) {
       structIssues.push(`ClueNode '${nodeId}' sourceRef 是 puzzle id (禁止)`);
-    } else if (!ws.items[node.sourceRef] && !ws.locations[node.sourceRef]) {
-      structIssues.push(`ClueNode '${nodeId}' sourceRef '${node.sourceRef}' 不存在`);
+    } else if (!ws.items[ref] && !ws.locations[ref]) {
+      structIssues.push(`ClueNode '${nodeId}' sourceRef '${ref}' 不存在`);
     }
   }
 

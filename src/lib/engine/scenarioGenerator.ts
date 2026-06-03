@@ -289,7 +289,13 @@ A single JSON object keyed by puzzle id:
 ## Node rules
 
 clue: a game item or location whose description provides raw information.
-  - sourceRef MUST be a real item.id or location.id from the world.
+  - sourceRef MUST be the raw id string exactly as it appears in the world (e.g. "wall-carvings").
+  - NO prefixes: do NOT write "item.wall-carvings", "items.wall-carvings", "item:wall-carvings",
+    "location.hall", "location:hall", or any other prefixed form. The raw id only.
+    CORRECT:   "sourceRef": "wall-carvings"
+    WRONG:     "sourceRef": "item.wall-carvings"   ← rejected
+    WRONG:     "sourceRef": "items.bookshelf"       ← rejected
+    WRONG:     "sourceRef": "location.main-hall"    ← rejected
   - sourceRef MUST NOT be a puzzle id. Puzzle descriptions explain mechanics, not clues.
 inference: a mental step combining clues into an intermediate conclusion.
   - No sourceRef.
@@ -512,18 +518,50 @@ function validatePuzzleGraphs(ws: WorldState, graphs: PuzzleGraph[]): string[] {
     }
 
     // (a) ClueNode.sourceRef must point to a real item or location (NOT a puzzle)
+    //
+    // Tolerance: strip known LLM prefixes ("item.", "items.", "item:", "location.",
+    // "locations.", "location:") before lookup — the prompt forbids these, but LLM
+    // sometimes adds them anyway. We normalise and re-look up, then flag the raw id
+    // as a non-fatal warning so the graph still validates rather than false-failing.
+    // If the stripped id also doesn't exist, that is the true error (missing premise).
     for (const [nodeId, node] of Object.entries(graph.nodes)) {
       if (node.type !== "clue") continue;
       if (!node.sourceRef) {
         violations.push(`${p}: ClueNode '${nodeId}' missing sourceRef`);
-      } else if (ws.puzzles[node.sourceRef]) {
+        continue;
+      }
+
+      const raw = node.sourceRef;
+      // Strip exactly these known prefix patterns (longest first to avoid partial strip)
+      const KNOWN_PREFIXES = [
+        "locations.", "location.", "location:",
+        "items.", "item.", "item:",
+      ];
+      let stripped = raw;
+      for (const prefix of KNOWN_PREFIXES) {
+        if (raw.startsWith(prefix)) {
+          stripped = raw.slice(prefix.length);
+          break;
+        }
+      }
+
+      // Mutate the node to use the normalised id so downstream checks work
+      if (stripped !== raw) {
+        node.sourceRef = stripped;
+        console.warn(
+          `validatePuzzleGraphs ${p}: ClueNode '${nodeId}' sourceRef prefix stripped ` +
+          `'${raw}' → '${stripped}' (prompt violation — raw id required)`,
+        );
+      }
+
+      if (ws.puzzles[stripped]) {
         violations.push(
-          `${p}: ClueNode '${nodeId}' sourceRef '${node.sourceRef}' is a puzzle id — ` +
+          `${p}: ClueNode '${nodeId}' sourceRef '${stripped}' is a puzzle id — ` +
           `puzzle descriptions are mechanism hints, not clues; use an item.id or location.id`,
         );
-      } else if (!ws.items[node.sourceRef] && !ws.locations[node.sourceRef]) {
+      } else if (!ws.items[stripped] && !ws.locations[stripped]) {
         violations.push(
-          `${p}: ClueNode '${nodeId}' sourceRef '${node.sourceRef}' not found in items or locations`,
+          `${p}: ClueNode '${nodeId}' sourceRef '${stripped}' not found in items or locations`,
         );
       }
     }
