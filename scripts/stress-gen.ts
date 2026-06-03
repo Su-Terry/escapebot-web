@@ -14,7 +14,7 @@ config({ path: ".env.local" });
 
 import * as fs from "fs";
 import { generateScenario } from "../src/lib/engine/scenarioGenerator";
-import type { WorldState, Item, Location, Puzzle } from "../src/lib/engine/types";
+import type { WorldState, Item, Location, Puzzle, PuzzleGraph } from "../src/lib/engine/types";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -127,6 +127,109 @@ function likelyClue(desc: string, fragments: string[]): boolean {
   return fragments.some(f => desc.includes(f));
 }
 
+// ── PuzzleGraph dump (Phase 3a) ───────────────────────────────────────────────
+//
+// Prints each graph in full so groundingProof can be manually inspected.
+// 3a validates graph STRUCTURE only (reachability, path length, sourceRef existence).
+// groundingProof authenticity (does it actually match description text?) is Phase 3b.
+// REVIEW the groundingProof lines below: vague or unquoted proofs = LLM fabrication risk.
+
+function dumpPuzzleGraph(
+  pid: string,
+  graph: PuzzleGraph | undefined,
+  ws: WorldState,
+): void {
+  if (!graph) {
+    emit(`  │`);
+    emit(`  │ 【PuzzleGraph】⚠ 未生成 (puzzle '${pid}' 圖缺失)`);
+    return;
+  }
+
+  // ── Structural validation (mirror of validatePuzzleGraphs, read-only) ──────
+  const structIssues: string[] = [];
+
+  const solutionNode = graph.nodes[graph.solutionNodeId];
+  if (!solutionNode) structIssues.push(`solutionNodeId '${graph.solutionNodeId}' 不在 nodes`);
+
+  const clueNodeIds = new Set(
+    Object.entries(graph.nodes)
+      .filter(([, n]) => n.type === "clue")
+      .map(([id]) => id),
+  );
+
+  for (const [nodeId, node] of Object.entries(graph.nodes)) {
+    if (node.type !== "clue") continue;
+    if (!node.sourceRef) {
+      structIssues.push(`ClueNode '${nodeId}' 缺 sourceRef`);
+    } else if (ws.puzzles[node.sourceRef]) {
+      structIssues.push(`ClueNode '${nodeId}' sourceRef 是 puzzle id (禁止)`);
+    } else if (!ws.items[node.sourceRef] && !ws.locations[node.sourceRef]) {
+      structIssues.push(`ClueNode '${nodeId}' sourceRef '${node.sourceRef}' 不存在`);
+    }
+  }
+
+  const reachable = new Set<string>(clueNodeIds);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const edge of graph.edges) {
+      if (!reachable.has(edge.to) && edge.from.every((id) => reachable.has(id))) {
+        reachable.add(edge.to);
+        changed = true;
+      }
+    }
+  }
+  const solutionReachable = reachable.has(graph.solutionNodeId);
+  if (!solutionReachable) structIssues.push(`SolutionNode 不可達`);
+
+  for (const edge of graph.edges) {
+    if (edge.to !== graph.solutionNodeId) continue;
+    if (edge.from.every((id) => clueNodeIds.has(id))) {
+      structIssues.push(`SolutionNode 被 ClueNodes-only 直連 (路徑長度 < 2)`);
+    }
+  }
+
+  // ── Output ──────────────────────────────────────────────────────────────────
+  const nodesByType = { clue: 0, inference: 0, solution: 0 };
+  for (const n of Object.values(graph.nodes)) nodesByType[n.type]++;
+
+  emit(`  │`);
+  emit(`  │ 【PuzzleGraph 3a — 結構自洽性檢查; groundingProof 真實性請人工審】`);
+  emit(`  │  Nodes: clue×${nodesByType.clue}  inference×${nodesByType.inference}  solution×${nodesByType.solution}  Edges: ${graph.edges.length}`);
+
+  const reachOk = solutionReachable ? "✓ 可達" : "✗ 不可達";
+  const pathOk = structIssues.some((s) => s.includes("路徑長度")) ? "✗ 路徑<2" : "✓ 路徑≥2";
+  const refOk = structIssues.some((s) => s.includes("sourceRef")) ? "✗ sourceRef錯誤" : "✓ sourceRefs";
+  emit(`  │  ${reachOk}  ${pathOk}  ${refOk}`);
+
+  if (structIssues.length > 0) {
+    for (const issue of structIssues) emit(`  │  ⚠ ${issue}`);
+  }
+
+  emit(`  │`);
+  emit(`  │  節點:`);
+  for (const [nid, node] of Object.entries(graph.nodes)) {
+    const ref = node.sourceRef ? `  [→${node.sourceRef}]` : "";
+    emit(`  │    ${node.type.padEnd(9)} ${nid}${ref}`);
+    emit(`  │              "${node.label}"`);
+  }
+
+  emit(`  │`);
+  emit(`  │  邊 (groundingProof 須人工審: 引用是否真的在 description 中):`);
+  for (let i = 0; i < graph.edges.length; i++) {
+    const edge = graph.edges[i];
+    const typeTag = edge.inferenceType.padEnd(16);
+    emit(`  │    [${i + 1}] ${typeTag} [${edge.from.join(", ")}] → ${edge.to}`);
+    // groundingProof 全文分行印出，讓人工能判斷是否造假
+    const proof = edge.groundingProof || "(空)";
+    const lines = proof.match(/.{1,70}/g) ?? [proof];
+    emit(`  │        groundingProof: ${lines[0]}`);
+    for (let l = 1; l < lines.length; l++) {
+      emit(`  │                        ${lines[l]}`);
+    }
+  }
+}
+
 // ── Dump a single scenario ────────────────────────────────────────────────────
 
 function dumpScenario(n: number, theme: string, ws: WorldState) {
@@ -178,6 +281,9 @@ function dumpScenario(n: number, theme: string, ws: WorldState) {
       emit(`  │  ${mark} 房間 [${lid}] ${loc.name}`);
       emit(`  │      "${loc.description}"`);
     }
+
+    // ── PuzzleGraph dump ──────────────────────────────────────────────────
+    dumpPuzzleGraph(pid, ws.puzzleGraphs?.[pid], ws);
 
     emit(`  └───────────────────────────────────────────────────────────────`);
     emit();

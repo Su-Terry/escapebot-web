@@ -4,7 +4,7 @@ import { google } from "@ai-sdk/google";
 import { ZodError } from "zod";
 
 import { WorldStateSchema, validatedWorldStateSchema } from "./types";
-import type { WorldState } from "./types";
+import type { WorldState, PuzzleGraph } from "./types";
 
 const MODEL = "gemini-2.5-pro";
 
@@ -252,6 +252,70 @@ must use the kebab-case id strings, NOT display names.
 
 Any violation causes rejection and retry. Verify all references before responding.`;
 
+// ── PuzzleGraph prompt (Phase 3a) ─────────────────────────────────────────────
+
+const PUZZLE_GRAPH_SYSTEM_PROMPT = `You are formalizing escape room puzzle reasoning chains as causal graphs.
+
+Given a validated escape room world (items, locations, puzzles with their solutions),
+output one PuzzleGraph per puzzle that explicitly maps HOW a player derives the solution
+from in-game clues alone.
+
+## Output format
+
+A single JSON object keyed by puzzle id:
+{
+  "<puzzle_id>": {
+    "puzzleId": "<puzzle_id>",
+    "nodes": {
+      "<node_id>": {
+        "id": "<node_id>",
+        "type": "clue" | "inference" | "solution",
+        "label": "<one-line description of what this node represents>",
+        "sourceRef": "<item.id or location.id>"  // clue nodes only; omit for inference/solution
+      }
+    },
+    "edges": [
+      {
+        "from": ["<node_id>", ...],   // ALL premise node ids (all must hold before conclusion follows)
+        "to": "<node_id>",
+        "inferenceType": "extract" | "combine" | "order-by-index" | "order-by-rule",
+        "groundingProof": "<exact quote or precise paraphrase from the description text>"
+      }
+    ],
+    "solutionNodeId": "<node_id>"
+  }
+}
+
+## Node rules
+
+clue: a game item or location whose description provides raw information.
+  - sourceRef MUST be a real item.id or location.id from the world.
+  - sourceRef MUST NOT be a puzzle id. Puzzle descriptions explain mechanics, not clues.
+inference: a mental step combining clues into an intermediate conclusion.
+  - No sourceRef.
+solution: the final answer node.
+  - Exactly one per graph. No sourceRef.
+
+## inferenceType rules
+
+extract:        The answer value is directly readable from a clue description.
+combine:        Multiple values are joined by an explicit rule stated in a description
+                (e.g. "concatenate the two halves").
+order-by-index: Items sorted by numeric positions given explicitly in descriptions.
+order-by-rule:  Items sorted by a rule explicitly stated in a description text —
+                no real-world cultural or scientific knowledge required.
+
+## Critical constraints
+
+1. In-game information only. Never use real-world knowledge (history, science, geography,
+   culture, mythology) not stated explicitly in item or location descriptions.
+2. Path length ≥ 2. The SolutionNode must NOT be reachable in a single edge from
+   ClueNodes alone. There must be at least one InferenceNode on the path.
+3. Specific groundingProof. Quote or precisely paraphrase the EXACT description text
+   that enables each inference. Do not write vague proofs like "the item mentions
+   something relevant". If you cannot find specific description text supporting an
+   inference, do not create that edge — the puzzle may have a missing premise.`;
+
 // ── Normalisation ─────────────────────────────────────────────────────────────
 
 /**
@@ -403,6 +467,207 @@ function validateLexicalConsistency(ws: WorldState): string[] {
   return violations;
 }
 
+// ── PuzzleGraph validation (Phase 3a) ────────────────────────────────────────
+//
+// SCOPE: structural self-consistency only.
+//
+//   What IS checked (3a):
+//     (a) every ClueNode.sourceRef points to a real item or location in the world
+//     (b) SolutionNode is forward-reachable from ClueNodes via declared edges
+//     (c) SolutionNode is not reachable in a single edge from ClueNodes-only
+//         (enforces at least one InferenceNode on the path)
+//     (d) every puzzle has a corresponding graph
+//
+//   What is NOT checked here (Phase 3b):
+//     Whether groundingProof text actually appears in the referenced description.
+//     A graph where the LLM fabricated a plausible groundingProof still passes 3a.
+//     Inspect groundingProof manually in stress-gen dump to catch fabrication early.
+
+function validatePuzzleGraphs(ws: WorldState, graphs: PuzzleGraph[]): string[] {
+  const violations: string[] = [];
+
+  // (d) every puzzle must have a graph
+  for (const puzzleId of Object.keys(ws.puzzles)) {
+    if (!graphs.find((g) => g.puzzleId === puzzleId)) {
+      violations.push(`Missing PuzzleGraph for puzzle '${puzzleId}'`);
+    }
+  }
+
+  for (const graph of graphs) {
+    const p = `PuzzleGraph '${graph.puzzleId}'`;
+
+    if (!ws.puzzles[graph.puzzleId]) {
+      violations.push(`${p}: references unknown puzzle id`);
+      continue;
+    }
+
+    // solutionNode must exist and have type "solution"
+    const solutionNode = graph.nodes[graph.solutionNodeId];
+    if (!solutionNode) {
+      violations.push(`${p}: solutionNodeId '${graph.solutionNodeId}' not in nodes`);
+      continue;
+    }
+    if (solutionNode.type !== "solution") {
+      violations.push(`${p}: solutionNodeId node has type '${solutionNode.type}', expected 'solution'`);
+    }
+
+    // (a) ClueNode.sourceRef must point to a real item or location (NOT a puzzle)
+    for (const [nodeId, node] of Object.entries(graph.nodes)) {
+      if (node.type !== "clue") continue;
+      if (!node.sourceRef) {
+        violations.push(`${p}: ClueNode '${nodeId}' missing sourceRef`);
+      } else if (ws.puzzles[node.sourceRef]) {
+        violations.push(
+          `${p}: ClueNode '${nodeId}' sourceRef '${node.sourceRef}' is a puzzle id — ` +
+          `puzzle descriptions are mechanism hints, not clues; use an item.id or location.id`,
+        );
+      } else if (!ws.items[node.sourceRef] && !ws.locations[node.sourceRef]) {
+        violations.push(
+          `${p}: ClueNode '${nodeId}' sourceRef '${node.sourceRef}' not found in items or locations`,
+        );
+      }
+    }
+
+    const clueNodeIds = new Set(
+      Object.entries(graph.nodes)
+        .filter(([, n]) => n.type === "clue")
+        .map(([id]) => id),
+    );
+
+    if (clueNodeIds.size === 0) {
+      violations.push(`${p}: no ClueNodes`);
+      continue;
+    }
+
+    // (b) forward reachability from ClueNodes to SolutionNode
+    // hyperedge semantics: edge fires only when ALL from-nodes are reachable
+    const reachable = new Set<string>(clueNodeIds);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const edge of graph.edges) {
+        if (!reachable.has(edge.to) && edge.from.every((id) => reachable.has(id))) {
+          reachable.add(edge.to);
+          changed = true;
+        }
+      }
+    }
+    if (!reachable.has(graph.solutionNodeId)) {
+      violations.push(`${p}: SolutionNode '${graph.solutionNodeId}' not reachable from ClueNodes`);
+    }
+
+    // (c) path length ≥ 2: SolutionNode must not be reachable via an edge whose
+    //     entire from-list consists only of ClueNodes (would mean answer is trivially direct)
+    for (const edge of graph.edges) {
+      if (edge.to !== graph.solutionNodeId) continue;
+      if (edge.from.every((id) => clueNodeIds.has(id))) {
+        violations.push(
+          `${p}: SolutionNode directly reached from ClueNodes-only edge ` +
+          `[${edge.from.join(", ")}] → '${graph.solutionNodeId}' — answer too direct, add InferenceNode`,
+        );
+      }
+    }
+  }
+
+  return violations;
+}
+
+// ── PuzzleGraph generation (Phase 3a) ────────────────────────────────────────
+
+async function generatePuzzleGraphs(ws: WorldState): Promise<PuzzleGraph[]> {
+  const worldContext = JSON.stringify(
+    {
+      items: Object.fromEntries(
+        Object.entries(ws.items).map(([id, item]) => [
+          id,
+          { name: item.name, description: item.description, locationId: item.locationId },
+        ]),
+      ),
+      locations: Object.fromEntries(
+        Object.entries(ws.locations).map(([id, loc]) => [
+          id,
+          { name: loc.name, description: loc.description },
+        ]),
+      ),
+      puzzles: Object.fromEntries(
+        Object.entries(ws.puzzles).map(([id, puz]) => [
+          id,
+          { description: puz.description, solution: puz.solution },
+        ]),
+      ),
+    },
+    null,
+    2,
+  );
+
+  const { object: raw, usage } = await generateObject({
+    model: google(MODEL),
+    output: "no-schema",
+    system: PUZZLE_GRAPH_SYSTEM_PROMPT,
+    prompt: `Formalize the reasoning chain for each puzzle as a PuzzleGraph.\n\nWorld:\n${worldContext}`,
+  });
+  logUsage(MODEL, usage);
+
+  const rawGraphs = raw as Record<string, unknown>;
+  const graphs: PuzzleGraph[] = [];
+
+  for (const [puzzleId, entry] of Object.entries(rawGraphs)) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+
+    // Normalise: ensure puzzleId field matches the dict key
+    const nodes: Record<string, unknown> = {};
+    const rawNodes = e["nodes"] as Record<string, unknown> | undefined;
+    if (rawNodes) {
+      for (const [nid, nval] of Object.entries(rawNodes)) {
+        if (nval && typeof nval === "object") {
+          nodes[nid] = { ...(nval as object), id: nid };
+        }
+      }
+    }
+
+    graphs.push({
+      puzzleId,
+      nodes: nodes as PuzzleGraph["nodes"],
+      edges: (e["edges"] as PuzzleGraph["edges"]) ?? [],
+      solutionNodeId: (e["solutionNodeId"] as string) ?? "",
+    });
+  }
+
+  return graphs;
+}
+
+// ── PuzzleGraph orchestration helper ─────────────────────────────────────────
+
+async function generateAndValidateGraphs(
+  ws: WorldState,
+  attempt: number,
+  context: string,
+): Promise<"ok" | "fail"> {
+  let graphs: PuzzleGraph[];
+  try {
+    graphs = await generatePuzzleGraphs(ws);
+  } catch (err) {
+    console.warn(
+      `scenarioGenerator attempt ${attempt} [${context}] graph_fail=generation_error:`,
+      describeError(err),
+    );
+    return "fail";
+  }
+
+  const graphViolations = validatePuzzleGraphs(ws, graphs);
+  if (graphViolations.length > 0) {
+    console.warn(
+      `scenarioGenerator attempt ${attempt} [${context}] graph_fail=validation world_ok=true violations:`,
+      graphViolations,
+    );
+    return "fail";
+  }
+
+  ws.puzzleGraphs = Object.fromEntries(graphs.map((g) => [g.puzzleId, g]));
+  return "ok";
+}
+
 // ── Usage logging ─────────────────────────────────────────────────────────────
 
 function logUsage(model: string, usage: LanguageModelUsage): void {
@@ -490,6 +755,8 @@ export async function generateScenario(
           );
           continue;
         }
+        // [3a] PuzzleGraph: generate causal inference chains + structural validation
+        if (await generateAndValidateGraphs(ws, attempt, "primary") === "fail") continue;
         console.log(
           `scenarioGenerator: success attempt=${attempt}` +
             ` locations=${Object.keys(ws.locations).length}` +
@@ -528,12 +795,16 @@ export async function generateScenario(
                 lexViolations,
               );
             } else {
-              console.warn(
-                `scenarioGenerator attempt ${attempt} recovered via normalize` +
-                  ` locations=${Object.keys(ws.locations).length}` +
-                  ` items=${Object.keys(ws.items).length}`,
-              );
-              return ws;
+              // [3a] PuzzleGraph: generate causal inference chains + structural validation
+              if (await generateAndValidateGraphs(ws, attempt, "recovery") === "ok") {
+                console.warn(
+                  `scenarioGenerator attempt ${attempt} recovered via normalize` +
+                    ` locations=${Object.keys(ws.locations).length}` +
+                    ` items=${Object.keys(ws.items).length}`,
+                );
+                return ws;
+              }
+              // graph fail: fall through to outer console.warn → next attempt
             }
           }
         } catch (normalizeErr) {
