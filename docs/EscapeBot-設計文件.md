@@ -226,7 +226,7 @@ Web 版沒有把 Discord 版直接「加上圖形介面」，而是**根本性�
 **內容品質（較關鍵）**
 - **engine visibility 模型 — ✅ 已完成(2026-06-02)**：原本所有物件進房全可見、無「未發現」概念。已補:Item 加 hidden + belongsTo,hidden 由 belongsTo 推導(LLM 只填 belongsTo);examine 家具 promote hidden children;toView/context 依 visibility 篩。是「逐步發現」遊戲性的基礎。(實作見 BACKLOG F-visibility。待補:reward item 的 solve 揭露,見 F-reward-reveal。)
 - **回合處理四拍重構 — ✅ 已完成(2026-06-02)**：原本 narration 與 stateChange 同一 LLM call 生,stateChange 被 reject 後 narration 照演 → LLM 演假成功(假 solve/假 move)、污染 history、snowball(石門事件)。已改「意圖→判定→敘述」四拍,narration 永遠在 state 定案後生,solve 走獨立 judge(verdict 三路)。**是 Phase 3 因果圖「判定結構化/可驗證」那一面的前身。**(見 BACKLOG F-turnloop-v2、F-stonedoor。)
-- 謎題可解性問題：LLM 生成的謎題有時線索不足以推出答案，玩家卡關。已先做止血（限制 LLM 提示只能用遊戲內資訊，不能腦補現實知識），但根本的「生成時保證可解」尚未做。**另:謎題答案發散(腦筋急轉彎)讓 judge 難判、玩家答合理答案被判錯=唬爛感,待 generator prompt 改(軸 B 排序中,見缺口分析)。**
+- 謎題可解性問題：LLM 生成的謎題有時線索不足以推出答案，玩家卡關。已先做止血（限制 LLM 提示只能用遊戲內資訊，不能腦補現實知識），但根本的「生成時保證可解」尚未做。**另:謎題答案發散(腦筋急轉彎)讓 judge 難判、玩家答合理答案被判錯=唬爛感。** **進展(2026-06-03)**: 壓測後 generator prompt 止血 + validateLexicalConsistency 程式驗證,三大症狀(明文洩漏/詞彙不一致/多字順序)降到偶發邊界、詞彙一致性程式根治。根本的「結構化保證可解」仍留 Phase 3。
 - 其他關卡品質：線索過度暴露（劇透）、容器/物品鎖機制、物品重複顯示、謎題位數描述不符、資料庫連線中斷無重試等。
 
 ---
@@ -260,7 +260,7 @@ Phase 3：因果圖當底層   — 未來（改底層邏輯模型本身）
 **下一波（next up，軸 B 順序,作者拍板 2026-06-02）**：
 1. **reward 揭露**：reward item 綁 puzzle、solve 後才揭露（visibility 第二條路徑,接四拍 solve）。順手收尾 visibility。見 BACKLOG F-reward-reveal。
 2. **B2 遊戲理解**：開場引導接上「捏包子餵貓=跟 LLM 對話」隱喻——有真實玩家證據（老玩家反覆卡「貓吃包子為啥推進度、邏輯呢」）。不太動 engine,軸 A 軸 B 雙收。
-3. **generator 謎題品質**：要求謎題答案明確、可從線索推出,避免腦筋急轉彎/答案發散（讓玩家答合理答案被判錯=唬爛感,且讓四拍 judge 有用武之地）。石門事件 B 半。
+3. **generator 謎題品質** ✅ **止血完成(2026-06-03)**：壓測 15場30題定位問題全在 generator(非 judge)——明文洩漏/詞彙不一致/多字順序。已 prompt 三段 + validateLexicalConsistency 程式驗證(詞彙一致性程式根治)。重壓測:三大問題降到偶發邊界,**過見人門檻、不需為見人上 Phase 3**。殘留(括弧洩漏、域知識通靈)記 BACKLOG。詳見 BACKLOG F-stonedoor B。
 4. **F-resume**：F5/重整理掉局接續（replay 基礎建設已到位,低成本）。
 
 **下一個大方向（升級）**：
