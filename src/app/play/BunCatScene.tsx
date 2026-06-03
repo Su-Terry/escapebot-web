@@ -440,6 +440,15 @@ export default function BunCatScene({ onAction, onWin, initialNarration, sceneIt
           result = { narration: '（無回應）', isWon: false };
         }
         if (cancelled) return;
+        // Guard: if a resize-triggered reinit replaced this Pixi instance during the LLM await,
+        // the old ticker is dead — flying_out→on_ground will never fire and setBusy(false) would
+        // be lost. Force-unlock React busy state and bail. (Not yet validated by an actual
+        // stale-gen trigger; the guard was added alongside a stuck-input investigation that
+        // turned out to be a missed throw, not a resize race.)
+        if (gen !== initGen) {
+          setBusyRef.current(false);
+          return;
+        }
 
         spitBun(result.narration);
         if (result.isWon) setTimeout(() => onWinRef.current(), 900);
