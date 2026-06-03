@@ -269,6 +269,26 @@ Phase 1 老玩家 (Player S) 主動回流玩 Phase 2 大改版 (餵貓 + 3D)。*
   - (a) **括弧/列舉「順便」洩漏答案順序** —— prompt 70% 漏掉的型態(LLM 覺得括弧是說明、沒意識到那就是答案)。Phase 3 或更強驗證才根治。
   - (b) **要遊戲外域知識 = 變相通靈** (Scene 12 北歐神話世界樹頂→底)。跟腦筋急轉彎同類, 是 generator 另一種發散。可在 prompt 補「謎題不該要遊戲外專門知識」(微調, 不急)。
 
+  **實玩端到端發現 (2026-06-03, 扮陌生人走完一場「迷航的生態方舟」10 turns 通關)**: dump 壓測看不出、實玩才現的問題 ——
+  - **#1 format hint 缺數量/格式**: 光譜題給了順序依據(由強至弱)但沒明示「輸入幾個詞、怎麼分隔」, 玩家要猜/試錯。puzzle.description 該明示數量+順序+格式三件套。
+  - **#2 假線索物件多**: examine 一堆物件(分配器「微弱蜂鳴」、終端機「顯示日誌」)用了勾人措辭、卻回「沒別的想說」。generator 不分「功能物件 vs 純氛圍」, 把氛圍寫得像有功能 → 玩家鑽死路。在「捏包子問貓」交互裡更傷(問一半得到聳肩, 稀釋核心互動爆點)。
+  - **#3 排序依據邏輯不通(最常犯之一)**: 「向日葵 月光 由強至弱」—— 向日葵不是光源、無法跟月光比光照強度; 玩家靠排除法/常識猜中而非推理。這是止血三類之外的第四類, grep 驗不到、prompt 難治。
+  - 正面: 能通關 ✓、移動/鎖門/persona 手感正常 ✓、玩家會主動選貓味金句做分享卡(A1 正面證據)。
+  - **結論修正**: dump 壓測**低估**了問題(看 dump 覺得合理、實玩才發現淺/邏輯不通)。真正的謎題品質要靠實玩。「邏輯不通」作者實玩經驗判斷=**最常犯的錯之一**, 不是偶發 —— 這推翻了「止血夠、過見人門檻」的樂觀, 觸發上 Phase 3。
+
+### Phase 3 因果圖 — 定位釐清 + 決定開做 (2026-06-03, 研讀 world-kernel spec)
+
+**參考**: 作者另一研究專案 world-kernel(`~/Desktop/GitHub/world-kernel`), L1 因果基板 / L2 語義投射 / L3 LLM 角色(對應其 Phase 1~6; Phase 7~12 是 LLM hallucination 分析, 不 port)。是 strategy/spec, 非可直接接的實作; 語言架構不同(OCaml/Racket/Python vs TS), Phase 3 是「借概念在 TS 重建」非「接 code」。
+**真正價值 = 解鎖多步複雜謎題(engine 能力天花板)**: 現 engine 只有單層「線索→字串答案」, 故謎題淺。因果圖 InferenceNode(中間結論)讓謎題能多步(A+B→中間, 中間+C→答案)。**謎題淺 + 邏輯不通同根**: engine 沒有多步結構, LLM 把多步壓進字串答案時丟推理鏈。
+**能力邊界 (關鍵, Claude Code 研讀確認)**: 因果圖 + path memory(Φ3 visited-set)+ provenance 全是**結構/追溯**層, **不驗語義**(world-kernel 哲學 meaning-not-in-L1)。path memory 是「知道結果怎麼產生的」(provenance), 非「驗結果對不對」。所以邏輯不通拆兩類:
+  - **missing-premise(遊戲內沒線索建立這步、玩家靠遊戲外常識補)= 作者判斷最痛/最常犯** → 因果圖**可達性程式根治**(無 ClueNode 支撐該步 → SolutionNode 不可達 → 重生)。**Phase 3 直接命中。**
+  - **wrong-premise(線索存在但本身荒謬, 向日葵比月光亮)= 次要** → 因果圖治不了(L2 邊語義), 靠 generator 設計規則「禁 domain-mapping 邊」壓(同止血精神, 不是事後驗、是不讓它生)。
+**定位**: Phase 3 = **長期 engine 底層(解鎖複雜謎題)**, 治 missing-premise 是順帶。也是長期方向 UGC host 的「可解性保證工具」前提。
+**時機**: **不擋見人**(見人只需止血後單層謎題夠不爛)。在 branch 分階段、main 隨時可見人。
+**節點/邊映射 (Claude Code 設計)**: 節點=命題(ClueNode 玩家可觀察的事實 / InferenceNode 中間結論 / SolutionNode 答案), 非物件。邊帶 inferenceType(extract/combine/order-by-index 可程式驗; order-by-stated-rule/domain-mapping 不可、後者禁止)。PuzzleGraph 平行於 WorldState 輸出, 不取代。
+**分階段**: 3a generator 輸出 PuzzleGraph + 可達性/路徑長度≥2 驗證(治 missing-premise、獨立可驗) → 3b 禁 domain-mapping + 擴 validateLexicalConsistency 驗 extract/combine → 3c judge 接 PuzzleGraph(答案命中 SolutionNode、減誤判) → 3d visibility 接 ClueNode 可觀察性。**先做 3a**。
+**不搬**: on/off state、cascade/BFS 傳播、contested、overlay、L3 NPC 機制(已有貓四拍)、snapshot——謎題是 DAG + 一次性推導, 不需要這些。
+
 
 
 **驗證啟示**: 「石門復現」很難測, 因為要同時湊齊 B(爛謎題)+ 模糊答案 + A(演成功)。但不需要復現石門來驗 A —— A 的驗證走「假 move 防守」(直接前往鎖房 → 看 narration 演不演穿越、currentLocationId 變不變、snowball 不 snowball, 不依賴謎題品質, 純戳四拍)+「judge 三路用答案明確的謎題測」(把謎題爛這變數拿掉、單驗 judge 準度)。
