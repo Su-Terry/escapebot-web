@@ -217,7 +217,7 @@ const NARRATION_SYSTEM_PROMPT = `你是一隻貓，是玩家與這個逃脫房�
 - 答錯：我把你的答案交給石門了。它沉默了很久，然後紋風不動。我想它要的不是這個。
 - 答模糊：你說「那個亮亮的東西」……我不確定該把哪個拿去問。是桌上那盞燈，還是牆上的螢幕？
 - 移動：我帶你穿過去了。這裡是另一個地方——空氣不太一樣。
-- 前往鎖著的門：我推了推那扇門。它鎖著，而且不肯跟我商量。
+- 前往鎖著的門：我推了推那扇門。它說不行——除非你先解開旁邊那個機關，要按順序輸入四個符號名稱。（轉達鎖的要求，不說答案在哪）
 - 查看、發現隱藏物件：我翻了翻書桌……底下壓著一張便條。它一直在那裡，只是沒人問起。
 - 查看、沒有東西：我仔細看了發電機。除了它在運轉，沒有別的想告訴我們的了。
 - weird moment（荒謬請求）：我看著你把備忘錄含進嘴裡，然後吐了出來。我不確定你想達成什麼，但備忘錄完好——它還在你手邊。
@@ -232,7 +232,7 @@ const NARRATION_SYSTEM_PROMPT = `你是一隻貓，是玩家與這個逃脫房�
 
 - Applied changes → 描述成功的結果。
 - Rejected changes → 描述失敗。那件事「沒有」發生。
-  - move_player rejected：路被封，玩家還在原地。
+  - move_player rejected：路被封，玩家還在原地。「What Actually Happened」若有 "lock requires" 行，把那個謎題的要求格式 in-character 轉達出來（「門說除非你先解開那個要輸入三位數字的機關」）。說「要什麼格式/機制」，不說「答案在哪/怎麼推」。
   - solve_puzzle wrong：什麼都沒變，鎖/機關沒有反應。
   - solve_puzzle ambiguous：用 in-character 問句請玩家釐清，不揭示答案。
   - take_item rejected：玩家無法拿起物品。
@@ -424,6 +424,18 @@ function buildEventSummary(
       } else if (change.type === "move_player") {
         const loc = newState.locations[change.toLocation!];
         lines.push(`  move_player → ${change.toLocation} (${loc?.name ?? "?"}) — BLOCKED: ${reason}`);
+        // Surface unsolved puzzle requirements so narration can relay what the lock needs.
+        // Narration must convey the mechanism description (what format/type of answer is needed),
+        // NOT hint at how to solve it or where to find clues.
+        const destLoc = newState.locations[change.toLocation!];
+        if (destLoc) {
+          const lockPuzzles = (destLoc.lockedByPuzzleIds ?? [])
+            .map((pid) => newState.puzzles[pid])
+            .filter((p): p is NonNullable<typeof p> => !!p && !p.isSolved);
+          for (const puzzle of lockPuzzles) {
+            lines.push(`    lock requires: "${puzzle.description}" (puzzle: ${puzzle.id})`);
+          }
+        }
       } else {
         lines.push(`  ${change.type} → ${change.itemId ?? change.toLocation ?? "?"} — REJECTED: ${reason}`);
       }
