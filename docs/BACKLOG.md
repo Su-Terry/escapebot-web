@@ -289,6 +289,26 @@ Phase 1 老玩家 (Player S) 主動回流玩 Phase 2 大改版 (餵貓 + 3D)。*
 **分階段**: 3a generator 輸出 PuzzleGraph + 可達性/路徑長度≥2 驗證(治 missing-premise、獨立可驗) → 3b 禁 domain-mapping + 擴 validateLexicalConsistency 驗 extract/combine → 3c judge 接 PuzzleGraph(答案命中 SolutionNode、減誤判) → 3d visibility 接 ClueNode 可觀察性。**先做 3a**。
 **不搬**: on/off state、cascade/BFS 傳播、contested、overlay、L3 NPC 機制(已有貓四拍)、snapshot——謎題是 DAG + 一次性推導, 不需要這些。
 
+#### 3a 實作 + 壓測結果 (2026-06-03, 完成)
+
+**實作 (scenarioGenerator.ts + types.ts)**:
+- PuzzleGraph schema(平行 WorldState、optional 向後相容): node 類型 clue(sourceRef 指 item/location id)/inference(中間結論)/solution; edge 帶 inferenceType(extract/combine/order-by-index/order-by-rule)+ groundingProof(引用哪段 description)。
+- **獨立 LLM call 生圖**(WorldState 驗過後才呼叫, 非塞進 WorldState prompt)—— 避免升高 WorldState 生成 failure rate、圖失敗可獨立 debug、圖 prompt 拿已驗 WorldState 做 context。最壞 6 次 LLM call(原 3)。
+- validatePuzzleGraphs: (a)solutionNode 存在且 type 對 (b)ClueNode.sourceRef 指向存在的 item/location (c)SolutionNode 從 ClueNodes 可達(前向 BFS, hyperedge: from 全 reachable 才激活 to) (d)最短路徑≥2(禁純 ClueNode 直達 SolutionNode)。違規 continue 重生。
+- **拍板**: sourceRef 不允許 puzzle.id(只 item/location, puzzle.description 是機制說明非線索, 否則 LLM 把偽線索藏謎題描述繞過); retry 先整體重生(log 記 fail rate, 高再切「只 retry 圖」)。
+- **能力邊界(註釋標)**: 可達性是「圖結構自洽」檢查, **非「圖真實對應遊戲線索」檢查**。LLM 知道答案, 會反向湊「可達+sourceRef 指真物件+grounding 字面有引用」但語意造假的圖。3a 程式擋不住這個, 要 3b(驗 grounding 對應 description 語意, 非只字面)。
+
+**第一次壓測撞 bug + 修**: graph_fail rate 假性爆高 —— LLM 在 sourceRef 加前綴(item./items./item:/location.), 驗證 `ws.items[sourceRef]` 死查全 miss。修: prompt 規定 raw id 無前綴(正反例)+ 驗證端 strip 已知前綴(longest-first)再查(strip 事件 console.warn 留痕)。修後重跑前綴問題消失、graph_fail 基本不觸發、時間腰斬。
+
+**重壓測 15 場人工審 groundingProof 結論 —— 3a 比預期強**:
+- **~85% 題 groundingProof 真有 description 支撐、推理鏈乾淨**。之前那種明文洩漏(鷹蛇獅鱷)/詞不一致(夜空vs星空)/missing-premise(向日葵沒建強弱)幾乎消失。**機制驗證: 「畫圖+寫 grounding」這個自證要求, 逼 generator 把線索補進遊戲(省略=圖畫不出/grounding 寫不出)—— 比純可達性強, grounding 要求有實質約束力。** 例 Scene 14 rune-lock: 石刻給首尾、筆記給三符文集合 → InferenceNode 推「中間是冰」, 真推理鏈、grounding 都在。
+- **~15% LLM 仍湊可達圖(grounding 字面有引用、語意牽強/造假)**: Scene 11 stabilizer「終端機需穩定碼、白板有穩定劑配方、共享『穩定』二字」= 文字遊戲牽強連結; Scene 15 reagent「夜空第二星→氖(10)」= 湊原子序、遊戲內無依據(domain-mapping 偽裝成 combine)。**3a 可達性放行(grounding 字面在), 正是 3b 要抓的(驗 grounding 語意對應, 非字面)。**
+- **沒弄壞既有機制**: lexical(風林火山/心靜如水/水蜘蛛)正常擋、deadlock 正常抓、reward/visibility 正常。
+
+**判準結論**: 3a 單獨治了 ~85% missing-premise、**過見人門檻**。3b(驗 grounding 語意)抓剩 ~15% 湊圖牽強案例, **非見人必需、是品質提升**。Phase 3 後續(3b/3c/3d)回到「核心驗證後深化」。
+
+**3a 殘留 bug (小修, 記錄)**: fallback path(Level 1)沒跑 PuzzleGraph 生成 → Scene 8(lexical 擋三次 exhausted→fallback)的圖「⚠ 未生成」。fallback 場景本就簡單、不致命, 但 fallback 該補生圖或明確標記無圖。
+
 
 
 **驗證啟示**: 「石門復現」很難測, 因為要同時湊齊 B(爛謎題)+ 模糊答案 + A(演成功)。但不需要復現石門來驗 A —— A 的驗證走「假 move 防守」(直接前往鎖房 → 看 narration 演不演穿越、currentLocationId 變不變、snowball 不 snowball, 不依賴謎題品質, 純戳四拍)+「judge 三路用答案明確的謎題測」(把謎題爛這變數拿掉、單驗 judge 準度)。
