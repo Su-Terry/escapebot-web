@@ -124,7 +124,22 @@ All field names must match exactly. All id values must be unique across the enti
 ### Puzzles
 - Create 2 to 3 puzzles.
 - Solutions must be ≤ 20 characters and derivable from in-world clues.
-- Solution must NOT appear literally in puzzle description.
+- **答案禁止明文洩漏**（所有 description 欄位皆適用）:
+  玩家看完任何 description 不需推理就能知道答案 = 洩漏，禁止。
+  目標是「充分線索 + 一步推理」——線索要夠讓人推得到，但不能直接說出答案。
+
+  ❌ 洩漏範例（禁止）:
+  - item.description: 「書脊上清楚拼出 V-E-R-I-T-A-S」→ 直接讀出答案
+  - puzzle.description: 「密語是『釋放』，輸入解鎖艙門」→ 答案就在題目裡
+  - location.description: 「四座石像分別是鷹、蛇、獅、鱷，從左到右排列」→ 順序答案直接列出
+
+  ✅ 允許範例（充分線索 + 一步推理）:
+  - item.description: 「筆記本上列出四種動物名稱，旁邊各標一個數字，最小的排第一」→ 有規則、有材料、推得到
+  - item.description: 「石碑上刻有『鷹居首，鱷居末』的文字，中間兩格空白」→ 部分告知、需配合別的線索
+
+  兩問自我檢查（兩個都要通過）:
+  1. 玩家不推理就能知道答案嗎？（洩漏 → 不合格）
+  2. 玩家能從現有線索推出唯一的答案嗎？（通靈 → 不合格）
 - rewardItemId: optional item placed in location when puzzle is solved.
 
 ### Puzzle Solution Design (重要)
@@ -149,6 +164,14 @@ puzzle.description 必須包含 format hint, 例如:
 
 如果 description 沒給 format hint, 玩家無法推導 → puzzle 變不可解。
 
+多字答案的順序（solution 含兩個以上詞時必讀）:
+
+solution 含兩個以上詞（空格分隔）時，必須二選一，不能模糊：
+A. 順序有意義 → puzzle.description 或線索必須給出明確排列依據（「從左到右」「按數字小到大」「依壁畫出現順序」等具體依據）。玩家只知道「有哪些詞」但不知道「哪個先」= 等同無解，禁止。
+B. 順序無意義 → puzzle.description 明示「任意順序」或「順序不拘」，例：「輸入三種元素的名稱，順序不拘，用空格分隔」。
+❌ 禁止：多字 solution + 沒說順序 + judge 要求精確順序。
+❌ 禁止：「按正確順序輸入」但沒說「正確順序」的依據是什麼。
+
 ### Win Condition
 - Player wins by reaching targetLocationId with all requiredSolvedPuzzleIds solved.
 - Do not make the win target trivially reachable from start.
@@ -156,6 +179,25 @@ puzzle.description 必須包含 format hint, 例如:
 ### Clue Design
 - Embed clues naturally in item/location descriptions.
 - Splitting clues across two items is encouraged (e.g. first two digits on one, last two on another).
+
+### 答案詞彙一致性（CRITICAL — 防止「夜空→星空」問題）
+
+solution 每一個詞必須在至少一個 item.description 或 location.description 中原字出現
+（夜空就是夜空，不能用「繁星」「夜晚」替代）。
+
+數字/代碼組合題允許「零件 + 組合規則」:
+- 允許：線索給 73 和 95，puzzle description 說「將兩數合併」，答案 7395。
+- 禁止：線索只說「兩個數字」，沒說是哪兩個，答案 7395。
+
+❌ 違規範例:
+- 線索用「夜空」→ 答案卻是「星空」（玩家輸「夜空」被 judge 判 wrong）
+- 線索圖畫是太陽和海浪 → 答案是「日 海」（「日」「海」沒在任何 description 出現過）
+
+✅ 正確做法:
+- 線索：「牆壁描繪著璀璨的星空」→ 答案：「星空」（原字）
+- 線索：「石碑左側刻著日字，右側刻著海字」→ 答案：「日 海」
+
+設計流程：先鎖定答案詞，再補線索確認每個詞在 description 原字出現。
 
 ### Description Style — STRICT
 字數上限 (超出視為違規):
@@ -314,6 +356,53 @@ function validateScenarioLogic(ws: WorldState): string[] {
   return violations;
 }
 
+/**
+ * Check that each word token in a puzzle solution appears verbatim in at least one
+ * description field (locations, items, or puzzles). This catches the common failure
+ * where the LLM uses "星空" as a solution but writes "夜空" in all clues.
+ *
+ * Capability limits (do not over-trust this check):
+ *
+ * 1. Existence check only, not context validity. `allDesc.includes(token)` confirms
+ *    the string appears somewhere — it does NOT confirm it appears in a relevant clue.
+ *    Short tokens (single Chinese characters like "山", 2-digit numbers like "73") may
+ *    match incidental text in unrelated descriptions. This function catches
+ *    "answer word never appears anywhere" but cannot catch "appears in wrong context".
+ *
+ * 2. Pure numeric codes (e.g. "1234") are skipped entirely. Their solvability depends
+ *    on the generator prompt's "充分線索 + 一步推理" rule (~70% reliable), not this
+ *    function. Do not assume that passing this check guarantees a numeric puzzle is
+ *    solvable — it does not check that at all.
+ */
+function validateLexicalConsistency(ws: WorldState): string[] {
+  const allDesc = [
+    ...Object.values(ws.locations).map((l) => l.description),
+    ...Object.values(ws.items).map((i) => i.description),
+    ...Object.values(ws.puzzles).map((p) => p.description),
+  ].join(" ");
+
+  const violations: string[] = [];
+
+  for (const puzzle of Object.values(ws.puzzles)) {
+    const sol = puzzle.solution.trim();
+
+    // Pure numeric code (e.g. "1234", "5678"): skip — format hint in description suffices.
+    if (/^\d+$/.test(sol)) continue;
+
+    const tokens = sol.split(/\s+/).filter(Boolean);
+
+    for (const token of tokens) {
+      if (!allDesc.includes(token)) {
+        violations.push(
+          `Puzzle "${puzzle.id}": solution token "${token}" not found in any description (solution: "${sol}")`,
+        );
+      }
+    }
+  }
+
+  return violations;
+}
+
 // ── Usage logging ─────────────────────────────────────────────────────────────
 
 function logUsage(model: string, usage: LanguageModelUsage): void {
@@ -393,6 +482,14 @@ export async function generateScenario(
           );
           continue;
         }
+        const lexViolations = validateLexicalConsistency(ws);
+        if (lexViolations.length > 0) {
+          console.warn(
+            `scenarioGenerator attempt ${attempt} lexical violations:`,
+            lexViolations,
+          );
+          continue;
+        }
         console.log(
           `scenarioGenerator: success attempt=${attempt}` +
             ` locations=${Object.keys(ws.locations).length}` +
@@ -424,12 +521,20 @@ export async function generateScenario(
               logicViolations,
             );
           } else {
-            console.warn(
-              `scenarioGenerator attempt ${attempt} recovered via normalize` +
-                ` locations=${Object.keys(ws.locations).length}` +
-                ` items=${Object.keys(ws.items).length}`,
-            );
-            return ws;
+            const lexViolations = validateLexicalConsistency(ws);
+            if (lexViolations.length > 0) {
+              console.warn(
+                `scenarioGenerator attempt ${attempt} recovery lexical violations:`,
+                lexViolations,
+              );
+            } else {
+              console.warn(
+                `scenarioGenerator attempt ${attempt} recovered via normalize` +
+                  ` locations=${Object.keys(ws.locations).length}` +
+                  ` items=${Object.keys(ws.items).length}`,
+              );
+              return ws;
+            }
           }
         } catch (normalizeErr) {
           console.warn(
