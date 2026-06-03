@@ -309,6 +309,39 @@ Phase 1 老玩家 (Player S) 主動回流玩 Phase 2 大改版 (餵貓 + 3D)。*
 
 **3a 殘留 bug (小修, 記錄)**: fallback path(Level 1)沒跑 PuzzleGraph 生成 → Scene 8(lexical 擋三次 exhausted→fallback)的圖「⚠ 未生成」。fallback 場景本就簡單、不致命, 但 fallback 該補生圖或明確標記無圖。
 
+#### 3a 驗證進度 + 邊界盤點 (2026-06-04, 未完成, 交接用)
+
+**狀態: 3a 驗證未完成。** 任務是「驗 3a(實玩解到通關)→ 修 bug → merge main → 每步更新文件」, 卡在驗證階段。以下只記查證過/實玩過的事實 + 明確標待驗/開放, 不含推測。
+
+**3a 改動的客觀邊界 (新 Claude Code diff main vs phase3-causal-graph, 非任何人記憶)**: 改 5 檔 ——
+- `types.ts`: WorldStateSchema 加 puzzleGraphs(optional, 向後相容); 新增 PuzzleGraph 相關 Zod schema。
+- `scenarioGenerator.ts`: generatePuzzleGraphs / validatePuzzleGraphs / generateAndValidateGraphs; 在 generateScenario 的 primary + recovery 路徑各插一次(驗證失敗 continue/fall-through → 下一 attempt)。
+- `turnHandler.ts` **三處**(其中兩處跟因果圖無關, 是順手修的 bug): (1) safeContext 加 `delete data["puzzleGraphs"]`; (2) NARRATION_SYSTEM_PROMPT 改鎖門 + 查看物件兩條範例、刪「查看無物」範例; (3) buildEventSummary 的 examine_item 分支加 item description 行、move rejected 分支加 lock requires 行。
+- `scripts/stress-gen.ts`: dumpPuzzleGraph(純 console 輸出, 無 runtime 影響)。
+- `docs/BACKLOG.md`: 純文件。
+- **puzzleGraphs 下游讀取點**: safeContext(已 delete, LLM 收不到)/ sessionStore(跟 ws 一起存 DB、load、initialState snapshot 都帶著)/ ruleEnforcer(structuredClone 帶著但不讀不改)/ toView(不含, 前端收不到)/ stress-gen(只讀)。
+
+**邊界確認狀態**:
+- ✅ **已確認(實玩/查證過)**: 向後相容(optional); safeContext strip puzzleGraphs; toView 不漏給前端; ruleEnforcer 不受影響。
+- ✅ **兩個順手修的 engine bug(實玩驗過, 跟 3a 因果圖無關但在此 branch 一起改的)**:
+  - **鎖門不呈現謎題要求**: puzzle.description 沒進 buildEventSummary 的 move rejected, 玩家不知鎖要什麼。修: event summary 加 lock requires + narration 範例帶出要求(說 what 不說 how、保持貓味)。實玩驗過(鎖門說出要求)。
+  - **examine 不呈現 item.description**: examine 無 hidden children 的物件時 event summary 只給「nothing new revealed」(那只指 hidden children), item.description 沒進 event summary → narration 照「查看無物」範例迴避(主控台/維修日誌/石碑「沒新訊息」)。**根因是 event summary 缺 description, 跟鎖門同源「該呈現的資訊沒進 event summary、narration 靠 LLM 隨機」**(diagnosis 過程一度誤判為「重複 examine」「puzzleGraphs 污染」「3a regression」, 均非; safeContext strip 是必要但非此 bug 根因)。修: examine event summary 加 item description + 刪迴避範例。實玩驗過(石碑唸出「太陽月亮、天空的賜予」)。註: 每次 examine 都印 description, 重複 examine 會說「還是這些」(非 bug, 囉嗦, 暫不處理)。
+- ⚠️ **待驗**:
+  - **生成時間 3.9 分鐘(單場實測)**: 每場最壞 3 次 WorldState 重生 + PuzzleGraph call。這場兩次掛 lexical(五行字「金水火土」不在 description)整場重生。main 約 1 分鐘。**retry 當初拍板「先整體重生、fail rate 高再切只重生失敗部分」—— 現在 fail rate 高、時間爆, 該切。這是 merge 見人的硬阻擋(玩家等不了 4 分鐘)。** 未修。
+  - **sessionStore: puzzleGraphs 進 DB + load + initialState snapshot 都帶著** —— 行為對不對未驗, 尤其 replay 載入帶著舊 puzzleGraphs(replay 歷來易連環追蟲)。未驗。
+- ❓ **開放問題(待查證, 別推測)**:
+  - **跳謎題通關**: 實玩第二場(植物方舟)只解一個謎題(密語「麥豆粟米」)就通關, 另一謎題(壓力閥 25/50/35)沒解、且主控台 narration 說「沒電」卻能輸密語成功。**diff 顯示 3a 沒碰 ruleEnforcer 的通關條件/謎題依賴**, 所以這大概率不是 3a, 是 engine 既有的通關條件/謎題依賴層。**待查: main 是否也能跳謎題通關(若是 = pre-existing 非 3a)**。
+  - **chip 不更新(visibility 揭露鏈)**: 換場景/examine 揭露後 chip 沒反映當前 visible 物件(作者指: hidden→shown 觸發時、每輪都該更新 chip)。Claude Code diff 確認 chip 程式碼(page.tsx/BunCatScene.tsx/actions.ts)3a 沒碰 → **pre-existing 非 3a**。屬 F-visibility 待補延伸。Claude Code 已加 log(toView/handleAction/suggestions), 待實際 examine 有 hidden child 的家具看三組 log 定斷點(server toView / React memo / 渲染)。**注意: 重生場景不保證生出有 hidden child 的場景(generator 生 belongsTo 比例不穩), 靠重生碰運氣驗不可靠 + 每場 3.9 分鐘 → 宜用固定 fixture/replay 已知有 hidden child 的場景驗。**
+
+**3a 實玩驗證兩場結果(對照壓測 dump ~85% 乾淨/~15% 湊圖)**:
+- 第一場(三聖物天空到大地): 玩家推不出「要輸入什麼」—— 中間聖物(蛇)無遊戲內線索建立、輸入格式(物件名 vs 象徵)不明 = missing-premise/湊圖, 3a 沒擋(屬已知 ~15%, 留 3b)。
+- 第二場(植物方舟): 單謎題線索夠(密語可推), 但撞「跳謎題通關」(見開放問題)。
+- **啟示**: 印證作者標準「謎題品質的真證明是實玩解到通關, 非看 dump」—— dump ~85% 乾淨 ≠ 實玩順利通關, 因為擋通關的不只 3a 那塊(還有 wrong-premise/湊圖殘留=3b、謎題依賴/通關條件=engine 既有層、生成時間)。**3a 是單謎題可解性的一塊, 單獨不足以讓「實玩通關體驗」達標。**
+
+**merge 決策(未拍板)**: 生成時間 3.9 分鐘 + 跳謎題通關待查 + sessionStore/replay 待驗 → 現狀不宜直接 merge 見人。傾向(未拍板): main 維持止血版見人(生成快、examine 正常)、3a 留 branch 解生成時間 + 驗 sessionStore + 做 3b, 再整批 merge。branch phase3-causal-graph 已 push(upstream 設好), main 未動。
+
+**交接注意(這段 session 的教訓, 給下個 session)**: 查 bug 根因要憑 runtime 證據(真實 prompt/log/diff), 「讀 code 推測出的根因」這段 session 錯了多次(examine 連續誤判三套)。作者陳述的實機事實(哪版 work/壞)優先於 code 推測。3a 範圍 = generator 輸出 PuzzleGraph + 驗證, 影響整個 generator 謎題系統(非僅可達性檢查)。建議下個 session + 新 Claude Code 都開乾淨的, 對著上面 diff 邊界清單逐條確認, 別帶舊推測。
+
 
 
 **驗證啟示**: 「石門復現」很難測, 因為要同時湊齊 B(爛謎題)+ 模糊答案 + A(演成功)。但不需要復現石門來驗 A —— A 的驗證走「假 move 防守」(直接前往鎖房 → 看 narration 演不演穿越、currentLocationId 變不變、snowball 不 snowball, 不依賴謎題品質, 純戳四拍)+「judge 三路用答案明確的謎題測」(把謎題爛這變數拿掉、單驗 judge 準度)。
